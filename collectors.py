@@ -1,0 +1,237 @@
+"""多源新闻采集：百度热搜（免key）/ 天行数据 / 聚合数据。
+
+每个采集器独立，失败只影响自身，collect_all() 汇总所有可用源的数据。
+返回的新闻统一为字典：
+    {"title": 标题, "summary": 摘要/描述, "source": 来源, "category": 分类}
+分类取值：国际 / 国内 / 社会 / 财经 / 科技 / 军事 / 热点
+"""
+
+import json
+import re
+from datetime import datetime
+
+import requests
+
+from config import JUHE_KEY, TIANAPI_KEY
+
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def _get(url, params=None, timeout=12):
+    resp = requests.get(
+        url, params=params, headers={"User-Agent": UA}, timeout=timeout
+    )
+    resp.raise_for_status()
+    return resp
+
+
+# ---------- 百度实时热搜（免 key） ----------
+
+BAIDU_HOT_URL = "https://top.baidu.com/board?tab=realtime"
+
+
+def collect_baidu_hot():
+    """抓取百度实时热搜榜，全部标为「热点」。"""
+    resp = _get(BAIDU_HOT_URL)
+    html = resp.text
+
+    # 页面里热搜数据以内嵌 JSON 形式放在 <!--s-data:{...}--> 中
+    m = re.search(r"<!--s-data:(\{.*?\})-->", html, re.S)
+    if not m:
+        raise ValueError("百度热搜页面解析失败（页面结构可能已改版）")
+
+    data = json.loads(m.group(1))
+    news = []
+    for card in data.get("data", {}).get("cards", []):
+        for item in card.get("content", []):
+            title = str(item.get("word", "")).strip()
+            if not title:
+                continue
+            news.append(
+                {
+                    "title": title,
+                    "summary": str(item.get("desc", "")).strip(),
+                    "source": "百度热搜",
+                    "category": "热点",
+                }
+            )
+    return news
+
+
+# ---------- 新浪滚动新闻（免 key，国际/科技/财经） ----------
+
+SINA_ROLL_URL = "https://feed.mix.sina.com.cn/api/roll/get"
+SINA_HEADERS = {"User-Agent": UA, "Referer": "https://news.sina.com.cn/"}
+
+# 标题中出现这些词 → 国际要闻；否则归国内。新浪 lid 分类不纯，用关键词粗分
+INTERNATIONAL_KEYWORDS = [
+    "美国", "英国", "法国", "德国", "俄罗斯", "日本", "韩国", "朝鲜",
+    "欧盟", "北约", "伊朗", "以色列", "乌克兰", "印度", "澳大利亚",
+    "加拿大", "土耳其", "沙特", "泰国", "越南", "新加坡", "巴西", "墨西哥",
+    "特朗普", "普京", "马克龙", "泽连斯基", "内塔尼亚胡", "联合国", "世卫",
+    "美元", "欧元", "日元", "全球", "国际", "白宫", "克里姆林宫", "五角大楼",
+    "英伟达", "特斯拉", "苹果", "谷歌", "微软", "OpenAI", "Anthropic",
+    "三星", "SK海力士", "台积电", "ASML", "欧洲", "中东", "非洲", "亚洲",
+]
+
+
+def _sina_category(title, default):
+    if any(kw in title for kw in INTERNATIONAL_KEYWORDS):
+        return "国际要闻"
+    return default
+
+
+def collect_sina():
+    """新浪滚动新闻接口（免 key）：2516 国际要闻 / 2515 科技 / 2509 财经要闻。"""
+    import random
+
+    news = []
+    channels = [("2516", "国际要闻"), ("2515", "科技"), ("2509", "财经要闻")]
+    for lid, default_cat in channels:
+        try:
+            resp = requests.get(
+                SINA_ROLL_URL,
+                params={
+                    "pageid": "153",
+                    "lid": lid,
+                    "k": "",
+                    "num": "15",
+                    "page": "1",
+                    "_": str(random.randint(10**13, 10**14)),  # 随机参数绕过接口缓存
+                },
+                headers=SINA_HEADERS,
+                timeout=12,
+            )
+            data = resp.json().get("result", {}).get("data", [])
+            for item in data:
+                title = str(item.get("title", "")).strip()
+                if not title:
+                    continue
+                news.append(
+                    {
+                        "title": title,
+                        "summary": str(item.get("intro", "") or "").strip(),
+                        "source": "新浪新闻",
+                        "category": _sina_category(title, default_cat),
+                    }
+                )
+        except Exception as exc:
+            print(f"[sina] lid {lid} 采集失败：{exc}")
+    return news
+
+
+# ---------- 天行数据（需 key，通用新闻接口 generalnews） ----------
+# 接口文档：https://www.tianapi.com/apiview/235  （综合新闻查询）
+# 一次拉取最新资讯，返回数据无分类字段，用标题关键词粗分国际/国内
+TIANAPI_NEWS_URL = "https://apis.tianapi.com/generalnews/index"
+CATEGORY_CN = {
+    "guoji": "国际",
+    "guonei": "国内",
+    "shehui": "社会",
+    "caijing": "财经",
+    "keji": "科技",
+    "junshi": "军事",
+}
+
+
+def collect_tianapi():
+    """天行综合新闻接口 generalnews：一次拉取 30 条最新资讯。"""
+    if not TIANAPI_KEY:
+        return []
+    news = []
+    try:
+        resp = _get(TIANAPI_NEWS_URL, params={"key": TIANAPI_KEY, "num": 30})
+        data = resp.json()
+        if data.get("code") != 200:
+            print(f"[tianapi] generalnews 返回错误：{data.get('msg')}")
+            return []
+        for item in data["result"]["newslist"]:
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            news.append(
+                {
+                    "title": title,
+                    "summary": str(item.get("description", "") or "").strip(),
+                    "source": str(item.get("source", "") or "天行数据"),
+                    "category": (
+                        "国际" if any(kw in title for kw in INTERNATIONAL_KEYWORDS) else "国内"
+                    ),
+                }
+            )
+    except Exception as exc:
+        print(f"[tianapi] generalnews 采集失败：{exc}")
+    return news
+
+
+# ---------- 聚合数据（需 key，分类 type 查询） ----------
+
+JUHE_NEWS_URL = "http://v.juhe.cn/toutiao/index"
+JUHE_TYPES = ["guoji", "guonei", "shehui", "caijing", "keji"]
+
+
+def collect_juhe():
+    """聚合数据头条新闻接口，按国际/国内/社会/财经/科技 分类各取若干条。"""
+    if not JUHE_KEY:
+        return []
+    news = []
+    for type_ in JUHE_TYPES:
+        try:
+            resp = _get(
+                JUHE_NEWS_URL,
+                params={"key": JUHE_KEY, "type": type_, "page_size": 10},
+            )
+            data = resp.json()
+            if data.get("error_code") != 0:
+                print(f"[juhe] 分类 {type_} 返回错误：{data.get('reason')}")
+                continue
+            for item in data["result"]["data"]:
+                news.append(
+                    {
+                        "title": str(item.get("title", "")).strip(),
+                        "summary": str(item.get("title", "")).strip(),
+                        "source": "聚合数据",
+                        "category": CATEGORY_CN.get(type_, "社会"),
+                    }
+                )
+        except Exception as exc:
+            print(f"[juhe] 分类 {type_} 采集失败：{exc}")
+    return news
+
+
+# ---------- 汇总 ----------
+
+def collect_all():
+    """依次采集所有启用的源，合并返回。单个源失败不影响整体。"""
+    all_news = []
+    collectors = [
+        ("百度热搜", collect_baidu_hot),
+        ("新浪新闻", collect_sina),
+        ("天行数据", collect_tianapi),
+        ("聚合数据", collect_juhe),
+    ]
+    for name, func in collectors:
+        try:
+            items = func()
+            print(f"[collect] {name}：{len(items)} 条")
+            all_news.extend(items)
+        except Exception as exc:
+            print(f"[collect] {name} 采集失败：{exc}")
+    return all_news
+
+
+if __name__ == "__main__":
+    print(f"采集时间：{datetime.now():%Y-%m-%d %H:%M:%S}")
+    news = collect_all()
+    print(f"\n合计 {len(news)} 条，按分类统计：")
+    counts = {}
+    for n in news:
+        counts[n["category"]] = counts.get(n["category"], 0) + 1
+    for k, v in counts.items():
+        print(f"  {k}：{v} 条")
+    print("\n前 10 条预览：")
+    for n in news[:10]:
+        print(f"  [{n['category']}] {n['title']}（{n['source']}）")
