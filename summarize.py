@@ -31,6 +31,8 @@ CATEGORY_MAP = {
 def build_prompt(news_items, per_section=None, per_line=None):
     per_section = per_section or NEWS_PER_SECTION
     per_line = per_line or NEWS_PER_LINE
+    # 免费小模型上下文和输出能力有限，避免 90+ 条过载导致输出模板或截断
+    news_items = news_items[:40]
     candidate = "\n".join(
         f"{i + 1}. 【{n['category']}】{n['title']}"
         f"{'｜' + n['summary'][:60] if n.get('summary') else ''}"
@@ -46,17 +48,17 @@ def build_prompt(news_items, per_section=None, per_line=None):
 1. 排除娱乐花边、猎奇、标题党、低信息量内容；同一事件只保留一条。
 2. 每条重写为 {per_line} 字左右的摘要：一句话核心事实 + 一句背景或影响，不注水、不评论。
 3. 国际指外国及中国对外事务；国内指中国内政民生；热点指全网热议话题。
-4. 必须使用简体中文；严格按下面的 markdown 格式输出，除内容外不要输出任何解释或前后缀：
+4. 必须使用简体中文；严格按下面 markdown 格式输出，只输出正式内容，不要输出任何解释、思考过程、前后缀：
 
 【国际】
-1. **标题**：摘要
-2. **标题**：摘要
+1. **真实新闻标题**：60字左右的摘要（一句话核心事实 + 一句背景或影响）
+2. **真实新闻标题**：60字左右的摘要
 
 【国内】
-1. **标题**：摘要
+1. **真实新闻标题**：60字左右的摘要
 
 【热点】
-1. **标题**：摘要"""
+1. **真实新闻标题**：60字左右的摘要"""
 
 
 def _call_provider(provider, prompt):
@@ -70,7 +72,7 @@ def _call_provider(provider, prompt):
     payload = {
         "model": provider["model"],
         "messages": [
-            {"role": "system", "content": "你是资深新闻编辑，输出简洁、客观、有信息量。"},
+            {"role": "system", "content": "你是资深新闻编辑，输出简洁、客观、有信息量。不要输出思考过程，只输出最终结果。"},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.6,
@@ -90,6 +92,8 @@ def _call_provider(provider, prompt):
     resp.raise_for_status()
     data = resp.json()
     text = data["choices"][0]["message"]["content"] or ""
+    # 过滤推理模型可能输出的 <think>...</think> 思考过程
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if not text.strip():
         raise RuntimeError("返回空内容")
     return text
@@ -197,6 +201,9 @@ def summarize(news_items):
             continue
         try:
             text = _call_provider(provider, prompt)
+            # 若模型前面有思考过程/前缀，只取正式输出部分
+            if "【国际】" in text:
+                text = text[text.find("【国际】"):]
             sections = parse_markdown(text)
             if _is_format_ok(sections):
                 if _is_chinese_ok(sections):
