@@ -16,6 +16,7 @@ import re
 import requests
 
 from config import LLM_PROVIDERS, NEWS_PER_LINE, NEWS_PER_SECTION
+from filter import normalize_title
 
 SECTIONS = ["国际", "国内", "热点"]
 
@@ -44,11 +45,16 @@ def build_prompt(news_items, per_section=None, per_line=None):
 候选新闻：
 {candidate}
 
-请从中选出最有公共价值和信息量的 {per_section * 3} 条新闻（国际 {per_section} 条、国内 {per_section} 条、热点 {per_section} 条），并遵守：
-1. 排除娱乐花边、猎奇、标题党、低信息量内容；同一事件只保留一条。
-2. 每条重写为 {per_line} 字左右的摘要：一句话核心事实 + 一句背景或影响，不注水、不评论。
-3. 国际指外国及中国对外事务；国内指中国内政民生；热点指全网热议话题。
-4. 必须使用简体中文；严格按下面 markdown 格式输出，只输出正式内容，不要输出任何解释、思考过程、前后缀：
+请从中选出最有公共价值和信息量的 {per_section * 3} 条新闻（国际、国内、热点各 {per_section} 条），并遵守：
+1. 排除娱乐花边、猎奇、标题党、低信息量内容。
+2. 分类标准必须严格执行：
+   - 国际：外国政府、社会、经济、军事、外交事件；或中国与外国的关系/冲突。不要把中国境内上市公司、中国股市、地方政府、国内民生、国内科技/体育事件归入国际。
+   - 国内：中国内地政治、经济、社会、民生、科技、体育事件。
+   - 热点：社交媒体热议、全网关注的话题（可跨国内外）。
+3. 同一事件只保留一条，且不能跨分类重复出现；标题高度相似也算重复。
+4. 每条重写为 {per_line} 字左右的摘要：一句话核心事实 + 一句背景或影响，不注水、不评论。
+5. 每类尽量选出 {per_section} 条；如某类候选不足，可用相关度高的事件补充，但宁缺毋滥。
+6. 必须使用简体中文；严格按下面 markdown 格式输出，只输出正式内容，不要输出任何解释、思考过程、前后缀：
 
 【国际】
 1. **真实新闻标题**：60字左右的摘要（一句话核心事实 + 一句背景或影响）
@@ -119,6 +125,49 @@ def _is_chinese_ok(sections):
         for t, s in items
     )
     return cn / total >= 0.3
+
+
+def _deduplicate_sections(sections):
+    """跨分类去重：同一条新闻只保留在优先级最高的分类里。
+
+    优先级：国内 > 国际 > 热点。
+    原因：模型容易把国内新闻（尤其财经、上市公司）错分到国际。
+    """
+    priority = {"国内": 0, "国际": 1, "热点": 2}
+    seen = {}
+    # 按优先级记录每个标题应该归哪个分类
+    for sec in sorted(sections, key=lambda s: priority.get(s, 99)):
+        for title, summary in sections[sec]:
+            norm = normalize_title(title)
+            if norm not in seen:
+                seen[norm] = (sec, title, summary)
+    # 按优先级重新组装
+    result = {sec: [] for sec in SECTIONS}
+    for sec in sorted(sections, key=lambda s: priority.get(s, 99)):
+        for title, summary in sections[sec]:
+            norm = normalize_title(title)
+            keeper_sec, keeper_title, keeper_summary = seen[norm]
+            if keeper_sec == sec:
+                result[sec].append((keeper_title, keeper_summary))
+    return {k: v for k, v in result.items() if v}
+
+
+def sections_to_markdown(sections, per_line=None):
+    """根据去重后的 sections 重新生成规范 markdown。"""
+    per_line = per_line or NEWS_PER_LINE
+    lines = []
+    for sec in SECTIONS:
+        items = sections.get(sec, [])
+        if not items:
+            continue
+        lines.append(f"【{sec}】")
+        lines.append("")
+        for i, (title, summary) in enumerate(items, 1):
+            if len(summary) > per_line:
+                summary = summary[:per_line] + "…"
+            lines.append(f"{i}. **{title}**：{summary}")
+            lines.append("")
+    return "\n".join(lines).strip()
 
 
 def normalize_markdown(text):
@@ -205,13 +254,14 @@ def summarize(news_items):
             if "【国际】" in text:
                 text = text[text.find("【国际】"):]
             sections = parse_markdown(text)
+            sections = _deduplicate_sections(sections)
             if _is_format_ok(sections):
                 if _is_chinese_ok(sections):
                     print(
                         f"[summarize] 已采用 {provider['base_url']} "
                         f"{provider['model']} 的提炼结果"
                     )
-                    return normalize_markdown(text)
+                    return sections_to_markdown(sections)
                 print(
                     f"[summarize] {provider['model']} 输出非中文，"
                     "尝试下一个 provider"
