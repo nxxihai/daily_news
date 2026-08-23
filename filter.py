@@ -26,7 +26,7 @@ SEEN_KEEP_DAYS = 30  # 历史去重记录保留天数
 
 def normalize_title(title):
     """去掉标点、空白后归一化，避免同一新闻因标点差异判重失败。"""
-    return re.sub(r"[\W_]+", "", title).lower()[:30]
+    return re.sub(r"[\W_]+", "", title).lower()
 
 
 def title_hash(title):

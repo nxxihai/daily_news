@@ -10,6 +10,7 @@
 """
 
 import os
+import re
 import socket
 import sys
 import threading
@@ -90,9 +91,11 @@ def main(dry_run=False):
     ok, msg = send(title, markdown)
     print(f"[run] {msg}")
     if ok:
-        seen = mark_seen(seen, [n["title"] for n in fresh])
+        # 只记录实际推送出去的新闻标题，避免候选池被过度过滤
+        pushed_titles = re.findall(r"\d+\.\s*\*\*(.+?)\*\*", markdown)
+        seen = mark_seen(seen, pushed_titles)
         save_seen(SEEN_FILE, seen)
-        print("[run] 已记录今日新闻标题，供明日去重。")
+        print(f"[run] 已记录 {len(pushed_titles)} 条推送标题，供明日去重。")
         return 0
     print("[run] 推送失败，未记录去重，可直接重跑。")
     return 1
