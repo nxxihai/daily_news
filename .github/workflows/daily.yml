@@ -3,10 +3,11 @@
 # 触发时间：每天北京时间 08:00（GitHub Actions 用 UTC，北京 8 点 = UTC 0 点）
 # 手动触发：仓库 Actions 页面 → Daily News Report → Run workflow 按钮
 #
-# 首次使用前，请在仓库 Settings → Secrets and variables → Actions 添加：
+# 首次使用前，请在仓库 Settings → Secrets and variables → Action 添加：
 #   TIANAPI_KEY       天行数据 key（你 config.py 里那串）
 #   OPENROUTER_API_KEY OpenRouter key（你 config.py 里那串 sk-or-v1-...）
 #   SERVERCHAN_KEY    Server酱 SendKey（你 config.py 里那串 SCT...）
+#   ZHIPU_API_KEY     智谱 GLM-4.7-Flash key（永久免费）
 #   JUHE_KEY          可选，聚合数据 key，没有可留空不填
 #   PUSHPLUS_TOKEN    可选，PushPlus token，没有可留空不填
 #   OPENAI_API_KEY    可选，DeepSeek 官方 key，没有可留空不填
@@ -48,6 +49,7 @@ jobs:
           JUHE_KEY: ${{ secrets.JUHE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python run_daily.py
