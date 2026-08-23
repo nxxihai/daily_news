@@ -40,6 +40,8 @@ LLM_PROVIDERS = [
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_key": os.environ.get("ZHIPU_API_KEY") or "",
         "model": "glm-4.7-flash",
+        # 关闭思考模式：默认混合思考要几十秒，关掉后秒回
+        "extra_body": {"thinking": {"type": "disabled"}},
         "timeout": 60,
     },
     # OpenRouter 免费模型（DeepSeek 失败时的备选）
