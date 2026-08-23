@@ -15,7 +15,7 @@ import os
 # ================= 新闻源 =================
 # 天行数据：https://www.tianapi.com/ 注册后，在"个人中心"找 key
 # 云端部署（GitHub Actions）时可通过 Secrets 注入同名环境变量覆盖此处默认值
-TIANAPI_KEY = os.environ.get("TIANAPI_KEY") or "6e3289c86b1e63a9d6aff2af1be34b16"
+TIANAPI_KEY = os.environ.get("TIANAPI_KEY") or ""
 
 # 聚合数据：https://www.juhe.cn/ 注册（需实名认证）后拿 key
 JUHE_KEY = os.environ.get("JUHE_KEY") or ""
@@ -28,19 +28,19 @@ LLM_PROVIDERS = [
     # 可在官网 https://openrouter.ai/models 挑其他 :free 结尾的模型追加
     {
         "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
         "model": "z-ai/glm-5.2:free",                      # GLM 5.2 中文强
         "timeout": 10,
     },
     {
         "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
         "model": "nvidia/nemotron-3.5-lightning:free",    # NVIDIA 快速模型
         "timeout": 10,
     },
     {
         "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
         "model": "google/gemma-4-31b-it:free",            # Gemma 4
         "timeout": 10,
     },
@@ -65,7 +65,7 @@ LLM_PROVIDERS = [
 # ================= 微信推送 =================
 # Server酱（主通道）：https://sct.ftqq.com/ 扫码获取 SendKey
 # 云端部署时可用环境变量 SERVERCHAN_KEY 覆盖（本地留默认值照常运行）
-SERVERCHAN_KEY = os.environ.get("SERVERCHAN_KEY") or "SCT398775TS2MEMjaZVoZ9TX4jDEfGb9Wi"
+SERVERCHAN_KEY = os.environ.get("SERVERCHAN_KEY") or ""
 
 # PushPlus（备用通道）：https://www.pushplus.plus/ 扫码获取 token
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN") or ""
