@@ -23,13 +23,13 @@ JUHE_KEY = os.environ.get("JUHE_KEY") or ""
 
 # ================= AI 提炼（按顺序尝试，第一个成功即启用） =================
 LLM_PROVIDERS = [
-    # 智谱 GLM-4.7-Flash：永久免费、中文强，第一优先
+    # 智谱 GLM-4.7-Flash：永久免费、中文强（本地/国内网络好用；云端海外偶尔超时）
     # 注册 https://open.bigmodel.cn/ 实名后拿 key，配到环境变量 ZHIPU_API_KEY
     {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_key": os.environ.get("ZHIPU_API_KEY") or "",
         "model": "glm-4.7-flash",
-        "timeout": 30,
+        "timeout": 60,
     },
     # DeepSeek 官方（质量稳定，GLM 失败时的备选）
     # 默认读取系统环境变量 OPENAI_API_KEY（你智能伴侣项目里已在用），也可直接填 key
