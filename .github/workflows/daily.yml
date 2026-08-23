@@ -19,7 +19,6 @@ on:
   schedule:
     - cron: '0 0 * * *'      # 每天 UTC 00:00 = 北京时间 08:00
   workflow_dispatch:          # 支持在网页上手动触发（部署后先用这个测试）
-  push:                       # 临时：push 即触发，方便验证，验证完移除
 
 permissions:
   contents: write             # 允许把去重记录 data/seen.json 写回仓库
