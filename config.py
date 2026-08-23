@@ -23,34 +23,7 @@ JUHE_KEY = os.environ.get("JUHE_KEY") or ""
 
 # ================= AI 提炼（按顺序尝试，第一个成功即启用） =================
 LLM_PROVIDERS = [
-    # OpenRouter 免费模型：https://openrouter.ai/ 注册拿 key
-    # 免费模型是共享池，高峰期可能被限流(429)，故配置多个候选，失败自动换下一个
-    # 可在官网 https://openrouter.ai/models 挑其他 :free 结尾的模型追加
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
-        "model": "z-ai/glm-5.2:free",                      # GLM 5.2 中文强
-        "timeout": 10,
-    },
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
-        "model": "nvidia/nemotron-3.5-lightning:free",    # NVIDIA 快速模型
-        "timeout": 10,
-    },
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
-        "model": "google/gemma-4-31b-it:free",            # Gemma 4
-        "timeout": 10,
-    },
-    # 本地 Ollama（可选）：装了 Ollama 并 pull 了模型即可用，完全免费离线
-    {
-        "base_url": "http://localhost:11434/v1",
-        "api_key": "ollama",
-        "model": "qwen3:8b",
-    },
-    # DeepSeek 官方（可选，需充值，但很便宜）
+    # DeepSeek 官方（质量稳定，优先使用）
     # 默认读取系统环境变量 OPENAI_API_KEY（你智能伴侣项目里已在用），也可直接填 key
     {
         "base_url": "https://api.deepseek.com",
@@ -58,6 +31,34 @@ LLM_PROVIDERS = [
         "model": "deepseek-v4-pro",
         # 关闭推理思考：v4-pro 默认思考模式要 30 秒+，关掉后 3~4 秒，质量足够
         "extra_body": {"thinking": {"type": "disabled"}},
+        "timeout": 30,
+    },
+    # OpenRouter 免费模型（DeepSeek 失败时的备选）
+    # 免费模型是共享池，高峰期可能被限流(429)，故配置多个候选，失败自动换下一个
+    # 可在官网 https://openrouter.ai/models 挑其他 :free 结尾的模型追加
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
+        "model": "z-ai/glm-5.2:free",
+        "timeout": 10,
+    },
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "timeout": 10,
+    },
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "",
+        "model": "google/gemma-4-31b-it:free",
+        "timeout": 10,
+    },
+    # 本地 Ollama（可选）：装了 Ollama 并 pull 了模型即可用，完全免费离线
+    {
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "ollama",
+        "model": "qwen3:8b",
     },
 ]
 
