@@ -81,4 +81,4 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN") or ""
 
 # ================= 内容设置 =================
 NEWS_PER_SECTION = 5    # 每类新闻条数（国际/国内/热点 各 5 条，共 15 条）
-NEWS_PER_LINE = 80      # 每条摘要目标字数（60~80 字）
+NEWS_PER_LINE = 50      # 每条摘要目标字数（50 字以内，信息更精炼）

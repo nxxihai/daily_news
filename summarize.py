@@ -52,19 +52,19 @@ def build_prompt(news_items, per_section=None, per_line=None):
    - 国内：中国内地政治、经济、社会、民生、科技、体育事件。
    - 热点：社交媒体热议、全网关注的话题（可跨国内外）。
 3. 同一事件只保留一条，且不能跨分类重复出现；标题高度相似也算重复。
-4. 每条重写为 {per_line} 字左右的摘要：一句话核心事实 + 一句背景或影响，不注水、不评论。严格控制字数，不要超过 {per_line} 字。
+4. 每条重写为 {per_line} 字以内的摘要：一句话核心事实 + 简短背景或影响，不注水、不评论。必须完整成句、信息完整，严禁用省略号或"......"截断，总字数不要超过 {per_line} 字。
 5. 每类尽量选出 {per_section} 条；如某类候选不足，可用相关度高的事件补充，但宁缺毋滥。
 6. 必须使用简体中文；严格按下面 markdown 格式输出，只输出正式内容，不要输出任何解释、思考过程、前后缀：
 
 【国际】
-1. **真实新闻标题**：60字左右的摘要（一句话核心事实 + 一句背景或影响）
-2. **真实新闻标题**：60字左右的摘要
+1. **真实新闻标题**：{per_line}字以内的摘要（一句话核心事实 + 一句背景或影响）
+2. **真实新闻标题**：{per_line}字以内的摘要
 
 【国内】
-1. **真实新闻标题**：60字左右的摘要
+1. **真实新闻标题**：{per_line}字以内的摘要
 
 【热点】
-1. **真实新闻标题**：60字左右的摘要"""
+1. **真实新闻标题**：{per_line}字以内的摘要"""
 
 
 def _call_provider(provider, prompt):
@@ -164,7 +164,9 @@ def sections_to_markdown(sections, per_line=None):
         lines.append("")
         for i, (title, summary) in enumerate(items, 1):
             if len(summary) > per_line:
-                summary = summary[:per_line] + "…"
+                # 兜底截断：去掉句尾残留标点再补省略号，避免出现 "…。" 或 "……"
+                summary = summary[:per_line].rstrip("，。；：、！？,.!:;")
+                summary += "…"
             lines.append(f"{i}. **{title}**：{summary}")
             lines.append("")
     return "\n".join(lines).strip()
@@ -229,7 +231,9 @@ def rule_summary(news_items, per_section=None, per_line=None):
         for i, n in enumerate(grouped[sec], 1):
             summary = n.get("summary") or ""
             if len(summary) > per_line:
-                summary = summary[:per_line] + "…"
+                # 兜底截断：去掉句尾残留标点再补省略号，避免出现 "…。" 或 "……"
+                summary = summary[:per_line].rstrip("，。；：、！？,.!:;")
+                summary += "…"
             lines.append(f"{i}. **{n['title']}**：{summary}")
             lines.append("")
     return "\n".join(lines).strip()
