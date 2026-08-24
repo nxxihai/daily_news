@@ -29,9 +29,7 @@ LLM_PROVIDERS = [
         "base_url": "https://api.deepseek.com",
         "api_key": os.environ.get("OPENAI_API_KEY") or "",
         "model": "deepseek-v4-flash",
-        # 关闭推理思考：v4-pro 默认思考模式要 30 秒+，关掉后 3~4 秒，质量足够
-        "extra_body": {"thinking": {"type": "disabled"}},
-        "timeout": 30,
+        "timeout": 60,
     },
     # 智谱 GLM-4.7-Flash：永久免费、中文强（国内网络好用；GitHub Actions 海外节点常超时）
     # 注册 https://open.bigmodel.cn/ 实名后拿 key，配到环境变量 ZHIPU_API_KEY
@@ -83,4 +81,4 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN") or ""
 
 # ================= 内容设置 =================
 NEWS_PER_SECTION = 5    # 每类新闻条数（国际/国内/热点 各 5 条，共 15 条）
-NEWS_PER_LINE = 60      # 每条摘要目标字数（40~60 字）
+NEWS_PER_LINE = 80      # 每条摘要目标字数（60~80 字）
