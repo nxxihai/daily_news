@@ -174,7 +174,10 @@ JUHE_TYPES = ["guoji", "guonei", "shehui", "caijing", "keji"]
 
 
 def collect_juhe():
-    """聚合数据头条新闻接口，按国际/国内/社会/财经/科技 分类各取若干条。"""
+    """聚合数据头条新闻接口，按国际/国内/社会/财经/科技 分类各取若干条。
+
+    兼容两种返回结构：result.data（旧版）和 result.list（新版/部分接口）。
+    """
     if not JUHE_KEY:
         print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册实名后获取）")
         return []
@@ -189,14 +192,23 @@ def collect_juhe():
             if data.get("error_code") != 0:
                 print(f"[juhe] 分类 {type_} 返回错误：{data.get('reason')}")
                 continue
-            for item in data["result"]["data"]:
+            result = data.get("result") or {}
+            items = result.get("data") or result.get("list") or []
+            for item in items:
                 title = str(item.get("title", "")).strip()
                 if not title:
                     continue
+                # 不同接口摘要字段名不同：description / summary / content
+                summary = str(
+                    item.get("description")
+                    or item.get("summary")
+                    or item.get("content")
+                    or ""
+                ).strip()
                 news.append(
                     {
                         "title": title,
-                        "summary": str(item.get("description", "") or "").strip(),
+                        "summary": summary,
                         "source": "聚合数据",
                         "category": CATEGORY_CN.get(type_, "社会"),
                     }
