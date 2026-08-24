@@ -65,7 +65,8 @@ LLM_PROVIDERS = [
     {
         "base_url": "http://localhost:11434/v1",
         "api_key": "ollama",
-        "model": "qwen3:8b",
+        "model": "qwen3:8b",\
+        "timeout": 10,
     },
 ]
 
