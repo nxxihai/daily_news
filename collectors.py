@@ -212,10 +212,10 @@ def collect_all():
     """依次采集所有启用的源，合并返回。单个源失败不影响整体。"""
     all_news = []
     collectors = [
+        ("聚合数据", collect_juhe),
         ("百度热搜", collect_baidu_hot),
         ("新浪新闻", collect_sina),
         ("天行数据", collect_tianapi),
-        ("聚合数据", collect_juhe),
     ]
     for name, func in collectors:
         try:
