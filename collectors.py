@@ -186,55 +186,51 @@ JUHE_TYPE_MAP = {
 
 
 def collect_juhe():
-    """聚合数据 AI 新闻简报接口，按分类各取若干条。
+    """聚合数据 AI 新闻简报接口，只请求 1 次取全部新闻（节省免费版额度）。
 
     接口返回结构：result.list（新闻数组），每条含 title / summary / type 等字段。
-    每个分类单独请求，超时 8 秒，失败不影响其他分类。
+    type 参数不填时返回全部类型，page_size 最大 20（文档限制）。
     """
     if not JUHE_KEY:
         print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册后获取）")
         return []
     news = []
-    # 优先采集热点/财经/科技/军事，其他作为补充；减少分类数避免超时
-    types_to_fetch = ["hot", "money", "tech", "war", "sports"]
-    for type_ in types_to_fetch:
-        try:
-            # 单独设置短超时，避免单个分类卡死拖垮整体
-            resp = _get(
-                JUHE_NEWS_URL,
-                params={"key": JUHE_KEY, "type": type_, "page_size": 10},
-                timeout=8,
-            )
-            data = resp.json()
-            if data.get("error_code") != 0:
-                print(f"[juhe] 分类 {type_} 返回错误：{data.get('reason')}")
+    try:
+        resp = _get(
+            JUHE_NEWS_URL,
+            params={"key": JUHE_KEY, "page_size": 20},  # 不指定 type，取全部；page_size 最大 20
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("error_code") != 0:
+            print(f"[juhe] 返回错误：{data.get('reason')}")
+            return news
+        result = data.get("result") or {}
+        items = result.get("list") or []
+        print(f"[juhe] 采到 {len(items)} 条")
+        for item in items:
+            title = str(item.get("title", "")).strip()
+            if not title:
                 continue
-            result = data.get("result") or {}
-            items = result.get("list") or []
-            print(f"[juhe] 分类 {type_} 采到 {len(items)} 条")
-            for item in items:
-                title = str(item.get("title", "")).strip()
-                if not title:
-                    continue
-                # AI新闻简报字段名：summary（摘要）、author_name（来源）
-                summary = str(item.get("summary", "") or "").strip()
-                raw_type = str(item.get("type", "")).strip()
-                # 映射到早报分类：国际/国内/热点；未知类型按 JUHE_TYPE_MAP 或归国内
-                cat = JUHE_TYPE_MAP.get(raw_type, "国内")
-                if cat in ("军事",):
-                    cat = "国际"
-                elif cat in ("科技", "财经", "体育", "娱乐", "汽车", "游戏"):
-                    cat = "国内"
-                news.append(
-                    {
-                        "title": title,
-                        "summary": summary,
-                        "source": str(item.get("author_name", "聚合数据") or "聚合数据").strip(),
-                        "category": cat,
-                    }
-                )
-        except Exception as exc:
-            print(f"[juhe] 分类 {type_} 采集失败：{exc}")
+            # AI新闻简报字段名：summary（摘要）、author_name（来源）
+            summary = str(item.get("summary", "") or "").strip()
+            raw_type = str(item.get("type", "")).strip()
+            # 映射到早报分类：国际/国内/热点；未知类型按 JUHE_TYPE_MAP 或归国内
+            cat = JUHE_TYPE_MAP.get(raw_type, "国内")
+            if cat in ("军事",):
+                cat = "国际"
+            elif cat in ("科技", "财经", "体育", "娱乐", "汽车", "游戏"):
+                cat = "国内"
+            news.append(
+                {
+                    "title": title,
+                    "summary": summary,
+                    "source": str(item.get("author_name", "聚合数据") or "聚合数据").strip(),
+                    "category": cat,
+                }
+            )
+    except Exception as exc:
+        print(f"[juhe] 采集失败：{exc}")
     return news
 
 
