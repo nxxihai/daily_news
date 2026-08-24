@@ -169,13 +169,14 @@ def collect_tianapi():
 
 # ---------- 聚合数据（需 key，分类 type 查询） ----------
 
-JUHE_NEWS_URL = "http://v.juhe.cn/toutiao/index"
+JUHE_NEWS_URL = "https://v.juhe.cn/toutiao/index"
 JUHE_TYPES = ["guoji", "guonei", "shehui", "caijing", "keji"]
 
 
 def collect_juhe():
     """聚合数据头条新闻接口，按国际/国内/社会/财经/科技 分类各取若干条。"""
     if not JUHE_KEY:
+        print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册实名后获取）")
         return []
     news = []
     for type_ in JUHE_TYPES:
@@ -189,10 +190,13 @@ def collect_juhe():
                 print(f"[juhe] 分类 {type_} 返回错误：{data.get('reason')}")
                 continue
             for item in data["result"]["data"]:
+                title = str(item.get("title", "")).strip()
+                if not title:
+                    continue
                 news.append(
                     {
-                        "title": str(item.get("title", "")).strip(),
-                        "summary": str(item.get("title", "")).strip(),
+                        "title": title,
+                        "summary": str(item.get("description", "") or "").strip(),
                         "source": "聚合数据",
                         "category": CATEGORY_CN.get(type_, "社会"),
                     }
