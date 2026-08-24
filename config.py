@@ -36,7 +36,7 @@ LLM_PROVIDERS = [
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
         "model": "deepseek/deepseek-r1:free",              # DeepSeek R1 免费版，中文强
-        "timeout": 10,
+        "timeout": 30,  # 云端主要靠它兜底，放宽到 30s
     },
     # 智谱 GLM-4.7-Flash：永久免费、中文强（国内网络好用；GitHub Actions 海外节点常超时）
     # 注册 https://open.bigmodel.cn/ 实名后拿 key，配到环境变量 ZHIPU_API_KEY
