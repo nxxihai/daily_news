@@ -17,7 +17,9 @@ name: Daily News Report
 
 on:
   schedule:
-    - cron: '45 2 * * *'     # 今天验证：UTC 02:45 = 北京时间 10:45（确认后改回 8:00）
+    - cron: '5 3 * * *'      # 测试：UTC 03:05 = 北京 11:05
+    - cron: '15 3 * * *'     # 测试：UTC 03:15 = 北京 11:15
+    - cron: '25 3 * * *'     # 测试：UTC 03:25 = 北京 11:25
   workflow_dispatch:          # 支持在网页上手动触发（部署后先用这个测试）
 
 permissions:
