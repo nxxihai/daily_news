@@ -168,21 +168,35 @@ def collect_tianapi():
 
 
 # ---------- 聚合数据（需 key，分类 type 查询） ----------
-
-JUHE_NEWS_URL = "https://v.juhe.cn/toutiao/index"
-JUHE_TYPES = ["guoji", "guonei", "shehui", "caijing", "keji"]
+# 使用「AI新闻简报」接口（ID: 850），文档：https://apis.juhe.cn/fapigw/aibrief/list
+JUHE_NEWS_URL = "https://apis.juhe.cn/fapigw/aibrief/list"
+# type 映射：AI新闻简报的 type 值 → 早报分类
+JUHE_TYPE_MAP = {
+    "hot": "热点",
+    "tech": "科技",
+    "money": "财经",
+    "war": "军事",
+    "sports": "体育",
+    "ent": "娱乐",
+    "auto": "汽车",
+    "game": "游戏",
+    "mobile": "科技",
+    "digi": "科技",
+}
 
 
 def collect_juhe():
-    """聚合数据头条新闻接口，按国际/国内/社会/财经/科技 分类各取若干条。
+    """聚合数据 AI 新闻简报接口，按分类各取若干条。
 
-    兼容两种返回结构：result.data（旧版）和 result.list（新版/部分接口）。
+    接口返回结构：result.list（新闻数组），每条含 title / summary / type 等字段。
     """
     if not JUHE_KEY:
-        print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册实名后获取）")
+        print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册后获取）")
         return []
     news = []
-    for type_ in JUHE_TYPES:
+    # 优先采集国际/财经/科技/军事/热点，娱乐体育汽车游戏作为补充
+    types_to_fetch = ["hot", "tech", "money", "war", "sports", "ent", "auto", "game"]
+    for type_ in types_to_fetch:
         try:
             resp = _get(
                 JUHE_NEWS_URL,
@@ -193,24 +207,26 @@ def collect_juhe():
                 print(f"[juhe] 分类 {type_} 返回错误：{data.get('reason')}")
                 continue
             result = data.get("result") or {}
-            items = result.get("data") or result.get("list") or []
+            items = result.get("list") or []
             for item in items:
                 title = str(item.get("title", "")).strip()
                 if not title:
                     continue
-                # 不同接口摘要字段名不同：description / summary / content
-                summary = str(
-                    item.get("description")
-                    or item.get("summary")
-                    or item.get("content")
-                    or ""
-                ).strip()
+                # AI新闻简报字段名：summary（摘要）、author_name（来源）
+                summary = str(item.get("summary", "") or "").strip()
+                raw_type = str(item.get("type", "")).strip()
+                # 映射到早报分类：国际/国内/热点；未知类型按 JUHE_TYPE_MAP 或归国内
+                cat = JUHE_TYPE_MAP.get(raw_type, "国内")
+                if cat in ("军事",):
+                    cat = "国际"
+                elif cat in ("科技", "财经", "体育", "娱乐", "汽车", "游戏"):
+                    cat = "国内"
                 news.append(
                     {
                         "title": title,
                         "summary": summary,
-                        "source": "聚合数据",
-                        "category": CATEGORY_CN.get(type_, "社会"),
+                        "source": str(item.get("author_name", "聚合数据") or "聚合数据").strip(),
+                        "category": cat,
                     }
                 )
         except Exception as exc:
