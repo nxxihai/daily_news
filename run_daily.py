@@ -109,10 +109,10 @@ def _thread_main(dry_run):
 
 if __name__ == "__main__":
     dry_run = "--dry-run" in sys.argv
-    # 总超时护栏：网络异常时最多跑 180 秒，避免计划任务永久挂起
+    # 总超时护栏：网络异常时最多跑 300 秒，避免计划任务永久挂起
     runner = threading.Thread(target=_thread_main, args=(dry_run,), daemon=True)
     runner.start()
-    runner.join(timeout=180)
+    runner.join(timeout=300)
     if runner.is_alive():
-        print("[run] 执行超过 180 秒，强制结束（常见于网络请求挂起）。")
+        print("[run] 执行超过 300 秒，强制结束（常见于网络请求挂起）。")
         os._exit(2)

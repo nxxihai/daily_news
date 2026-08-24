@@ -18,7 +18,7 @@ import os
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY") or "6e3289c86b1e63a9d6aff2af1be34b16"
 
 # 聚合数据：https://www.juhe.cn/ 注册（需实名认证）后拿 key
-JUHE_KEY = os.environ.get("JUHE_KEY") or ""
+JUHE_KEY = os.environ.get("JUHE_KEY") or "b569e931c55389e18e561b3d8476703a"
 
 
 # ================= AI 提炼（按顺序尝试，第一个成功即启用） =================
@@ -29,7 +29,7 @@ LLM_PROVIDERS = [
         "base_url": "https://api.deepseek.com",
         "api_key": os.environ.get("OPENAI_API_KEY") or "",
         "model": "deepseek-v4-flash",
-        "timeout": 60,
+        "timeout": 20,  # 云端缩短超时，快速失败切换
     },
     # 智谱 GLM-4.7-Flash：永久免费、中文强（国内网络好用；GitHub Actions 海外节点常超时）
     # 注册 https://open.bigmodel.cn/ 实名后拿 key，配到环境变量 ZHIPU_API_KEY
@@ -38,7 +38,7 @@ LLM_PROVIDERS = [
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_key": os.environ.get("ZHIPU_API_KEY") or "",
         "model": "glm-4.7-flash",
-        "timeout": 60,
+        "timeout": 15,  # 海外节点访问国内常超时，设更短
     },
     # OpenRouter 免费模型（DeepSeek 失败时的备选）
     # 免费模型是共享池，高峰期可能被限流(429)，故配置多个候选，失败自动换下一个

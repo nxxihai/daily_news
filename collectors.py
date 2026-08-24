@@ -189,18 +189,21 @@ def collect_juhe():
     """聚合数据 AI 新闻简报接口，按分类各取若干条。
 
     接口返回结构：result.list（新闻数组），每条含 title / summary / type 等字段。
+    每个分类单独请求，超时 8 秒，失败不影响其他分类。
     """
     if not JUHE_KEY:
         print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册后获取）")
         return []
     news = []
-    # 优先采集国际/财经/科技/军事/热点，娱乐体育汽车游戏作为补充
-    types_to_fetch = ["hot", "tech", "money", "war", "sports", "ent", "auto", "game"]
+    # 优先采集热点/财经/科技/军事，其他作为补充；减少分类数避免超时
+    types_to_fetch = ["hot", "money", "tech", "war", "sports"]
     for type_ in types_to_fetch:
         try:
+            # 单独设置短超时，避免单个分类卡死拖垮整体
             resp = _get(
                 JUHE_NEWS_URL,
                 params={"key": JUHE_KEY, "type": type_, "page_size": 10},
+                timeout=8,
             )
             data = resp.json()
             if data.get("error_code") != 0:
@@ -208,6 +211,7 @@ def collect_juhe():
                 continue
             result = data.get("result") or {}
             items = result.get("list") or []
+            print(f"[juhe] 分类 {type_} 采到 {len(items)} 条")
             for item in items:
                 title = str(item.get("title", "")).strip()
                 if not title:
