@@ -29,7 +29,14 @@ LLM_PROVIDERS = [
         "base_url": "https://api.deepseek.com",
         "api_key": os.environ.get("OPENAI_API_KEY") or "",
         "model": "deepseek-v4-flash",
-        "timeout": 20,  # 云端缩短超时，快速失败切换
+        "timeout": 40,  # 云端海外节点访问 DeepSeek 较慢，放宽到 40s；本地直连更快
+    },
+    # DeepSeek 海外备选：走 OpenRouter（海外节点访问 OpenRouter 快），官方 API 超时时兜底
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "model": "deepseek/deepseek-r1:free",              # DeepSeek R1 免费版，中文强
+        "timeout": 10,
     },
     # 智谱 GLM-4.7-Flash：永久免费、中文强（国内网络好用；GitHub Actions 海外节点常超时）
     # 注册 https://open.bigmodel.cn/ 实名后拿 key，配到环境变量 ZHIPU_API_KEY
