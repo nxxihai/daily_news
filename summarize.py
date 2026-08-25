@@ -22,11 +22,55 @@ SECTIONS = ["国际", "国内", "热点"]
 
 # 采集源的分类 → 早报三栏的映射（规则版用）
 CATEGORY_MAP = {
-    "国际": "国际", "国际要闻": "国际", "军事": "国际",
+    "国际": "国际", "国际要闻": "国际", "军事": "国际", "world": "国际",
     "国内": "国内", "国内要闻": "国内", "财经": "国内",
-    "财经要闻": "国内", "科技": "国内", "社会": "国内",
+    "财经要闻": "国内", "科技": "国内", "社会": "国内", "sports": "国内",
     "热点": "热点",
 }
+
+# 标题关键词 → 分类映射（规则版兜底用，避免源分类错误）
+TITLE_KEYWORDS = {
+    "国际": [
+        "美国", "特朗普", "拜登", "伊朗", "以色列", "俄罗斯", "乌克兰", "朝鲜",
+        "欧盟", "北约", "联合国", "制裁", "贸易战", "关税", "美股", "标普",
+        "美联储", "美元", "英镑", "日元", "欧元", "原油", "石油", "黄金",
+        "外交", "大使", "领事", "条约", "协议", "冲突", "战争", "军事",
+        "空袭", "导弹", "核", "恐怖袭击", "人质", "难民", "移民",
+        "印度", "日本", "韩国", "越南", "泰国", "新加坡", "澳大利亚",
+        "英国", "法国", "德国", "意大利", "西班牙", "加拿大", "墨西哥",
+        "巴西", "阿根廷", "南非", "埃及", "土耳其", "沙特", "阿联酋",
+        "叙利亚", "伊拉克", "阿富汗", "巴基斯坦", "孟加拉", "缅甸",
+        "外报", "外媒", "外盘", "国际", "全球", "海外", "跨境", "进出口",
+    ],
+    "国内": [
+        "中国", "北京", "上海", "深圳", "广州", "杭州", "成都", "武汉",
+        "国务院", "发改委", "央行", "证监会", "银保监会", "工信部",
+        "全国人大", "政协", "两会", "政府工作报告", "十四五", "十五五",
+        "A股", "港股", "沪深", "创业板", "科创板", "北交所", "上证指数",
+        "人民币", "楼市", "房价", "房地产", "基建", "高铁", "地铁",
+        "社保", "医保", "养老金", "就业", "生育", "教育", "高考",
+        "医保", "疫苗", "疫情", "卫健委", "疾控",
+        "乡村振兴", "扶贫", "共同富裕", "碳中和", "新能源", "光伏",
+        "芯片", "半导体", "华为", "小米", "阿里", "腾讯", "字节",
+        "乒协", "足协", "篮协", "中超", "CBA", "乒超", "全运会",
+        "国乒", "女排", "国足", "游泳", "田径", "体操",
+    ],
+}
+
+
+def _classify_by_title(title):
+    """根据标题关键词推断分类，用于规则版兜底。"""
+    title = title.lower()
+    scores = {"国际": 0, "国内": 0}
+    for sec, keywords in TITLE_KEYWORDS.items():
+        for kw in keywords:
+            if kw in title:
+                scores[sec] += 1
+    if scores["国际"] > scores["国内"]:
+        return "国际"
+    if scores["国内"] > scores["国际"]:
+        return "国内"
+    return None
 
 
 def build_prompt(news_items, per_section=None, per_line=None):
@@ -97,7 +141,15 @@ def _call_provider(provider, prompt):
     resp = requests.post(url, json=payload, headers=headers, timeout=(5, timeout))
     resp.raise_for_status()
     data = resp.json()
-    text = data["choices"][0]["message"]["content"] or ""
+    msg = data["choices"][0]["message"]
+    # 推理模型（DeepSeek V4/R1 等）思考模式下 content 可能为空，
+    # 正式回答在 reasoning_content；或 content 是数组格式
+    text = msg.get("content") or ""
+    if not text.strip() and msg.get("reasoning_content"):
+        text = msg["reasoning_content"]
+    # 兼容数组格式 content
+    if isinstance(text, list):
+        text = "".join(str(x) for x in text)
     # 过滤推理模型可能输出的 <think>...</think> 思考过程
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if not text.strip():
@@ -219,8 +271,15 @@ def rule_summary(news_items, per_section=None, per_line=None):
     per_line = per_line or NEWS_PER_LINE
     grouped = {sec: [] for sec in SECTIONS}
     for n in news_items:
-        sec = CATEGORY_MAP.get(n["category"])
-        if sec and len(grouped[sec]) < per_section:
+        # 先用采集源自带的分类
+        sec = CATEGORY_MAP.get(n.get("category", ""))
+        # 如果源分类缺失或不明确，用标题关键词推断
+        if not sec:
+            sec = _classify_by_title(n["title"])
+        # 还是不确定的，默认归"热点"
+        if not sec:
+            sec = "热点"
+        if len(grouped[sec]) < per_section:
             grouped[sec].append(n)
     lines = []
     for sec in SECTIONS:

@@ -32,10 +32,11 @@ LLM_PROVIDERS = [
         "timeout": 40,  # 云端海外节点访问 DeepSeek 较慢，放宽到 40s；本地直连更快
     },
     # DeepSeek 海外备选：走 OpenRouter（海外节点访问 OpenRouter 快），官方 API 超时时兜底
+    # 免费版 :free 后缀模型常因限流/下架报 404，改用付费版模型 ID（按量计费，很便宜）
     {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "deepseek/deepseek-r1:free",              # DeepSeek R1 免费版，中文强
+        "model": "deepseek/deepseek-r1",                   # R1 标准版（非 :free），可用性高
         "timeout": 30,  # 云端主要靠它兜底，放宽到 30s
     },
     # 智谱 GLM-4.7-Flash：永久免费、中文强（国内网络好用；GitHub Actions 海外节点常超时）
@@ -45,7 +46,7 @@ LLM_PROVIDERS = [
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_key": os.environ.get("ZHIPU_API_KEY") or "",
         "model": "glm-4.7-flash",
-        "timeout": 15,  # 海外节点访问国内常超时，设更短
+        "timeout": 25,  # 放宽到 25s，海外节点偶尔能连上
     },
     # OpenRouter 免费模型（DeepSeek 失败时的备选）
     # 免费模型是共享池，高峰期可能被限流(429)，故配置多个候选，失败自动换下一个
@@ -53,20 +54,20 @@ LLM_PROVIDERS = [
     {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "model": "deepseek/deepseek-v4-flash",            # DeepSeek V4 Flash 标准版
+        "timeout": 30,
+    },
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
         "model": "z-ai/glm-5.2:free",                      # GLM 5.2 中文强
-        "timeout": 10,
+        "timeout": 15,
     },
     {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
         "model": "nvidia/nemotron-3.5-lightning:free",    # NVIDIA 快速模型
-        "timeout": 10,
-    },
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "google/gemma-4-31b-it:free",            # Gemma 4
-        "timeout": 10,
+        "timeout": 15,
     },
     # 本地 Ollama（可选）：装了 Ollama 并 pull 了模型即可用，完全免费离线
     {
