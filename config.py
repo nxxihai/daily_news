@@ -42,11 +42,11 @@ LLM_PROVIDERS = [
         "timeout": 30,
         "max_retries": 2,
     },
-    # 3. OpenRouter DeepSeek V3 免费版（可能限流，作为备选）
+    # 3. OpenRouter 免费备选（2026-08 实测可用；免费模型可能限流/下架，失败自动换下一个）
     {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "deepseek/deepseek-chat-v3-0324:free",
+        "model": "z-ai/glm-5.2:free",
         "timeout": 30,
         "max_retries": 1,
     },
@@ -54,7 +54,7 @@ LLM_PROVIDERS = [
     {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "z-ai/glm-4.7-flash:free",
+        "model": "minimax/minimax-m3:free",
         "timeout": 20,
         "max_retries": 1,
     },
@@ -91,3 +91,4 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN") or ""
 # ================= 内容设置 =================
 NEWS_PER_SECTION = 5    # 每类新闻条数（国际/国内/热点 各 5 条，共 15 条）
 NEWS_PER_LINE = 50      # 每条摘要目标字数（50 字以内，信息更精炼）
+FALLBACK_EXTRA_PER_SECTION = 3  # AI 全失效时，规则兜底每栏多加 3 条（一句话新闻，共 24 条）

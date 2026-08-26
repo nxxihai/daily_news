@@ -13,7 +13,13 @@ import time
 
 import requests
 
-from config import LLM_PROVIDERS, NEWS_PER_LINE, NEWS_PER_SECTION, RETRY_BASE_DELAY
+from config import (
+    FALLBACK_EXTRA_PER_SECTION,
+    LLM_PROVIDERS,
+    NEWS_PER_LINE,
+    NEWS_PER_SECTION,
+    RETRY_BASE_DELAY,
+)
 from filter import importance_score, normalize_title
 
 SECTIONS = ["国际", "国内", "热点"]
@@ -513,36 +519,62 @@ def _is_same_event(t1, s1, t2, s2):
 
     规则：
     1. 标题相似（_is_similar_title）→ 同事件
-    2. 标题或摘要有 >=5 字公共短语（如相同地点+主体"河南平顶山"）→ 同事件
-    3. 共享数字（伤亡人数等）+ >=3 字核心短语（去数字后比较）→ 同事件
+    2. 同事件指纹：共享数字（伤亡人数/年份等）+ >=4 字核心短语
+       （标题或摘要，去数字后比较）。如"冷藏车"事故多篇报道都含"8"
+       且摘要共享"河南平顶山"。无数字的套话（"相关部门已回应"）不会误判。
     """
     if _is_similar_title(t1, t2):
         return True
     s1c, s2c = _clean_for_compare(s1), _clean_for_compare(s2)
-    lcs_t = _longest_common_substring_len(t1, t2)
-    lcs_s = _longest_common_substring_len(s1c, s2c)
-    if max(lcs_t, lcs_s) >= 5:
-        return True
     nums = set(re.findall(r"\d+", t1 + s1)) & set(re.findall(r"\d+", t2 + s2))
     if nums:
         lt = _longest_common_substring_len(re.sub(r"\d+", "", t1), re.sub(r"\d+", "", t2))
         ls = _longest_common_substring_len(re.sub(r"\d+", "", s1c), re.sub(r"\d+", "", s2c))
-        if max(lt, ls) >= 3:
+        if max(lt, ls) >= 4:
             return True
     return False
 
 
+def _one_line_summary(n, per_line):
+    """规则兜底生成完整一句话新闻：完整性优先，字数上限放宽到 1.6 倍。"""
+    s = _clean_for_compare(n.get("summary") or "")
+    s = s.replace("**", "").replace("*", "").strip()
+    # 去掉尾部省略号/连续句号
+    s = re.sub(r"[…。.]{2,}\s*$", "", s).rstrip("…。.")
+    # 去掉结尾悬挂标点
+    while s and s[-1] in "，、；：":
+        s = s[:-1].rstrip()
+    if not s:
+        s = n["title"]
+    if s and not re.search(r"[。！？]$", s):
+        s += "。"
+    # 超长时在标点处断句（放宽上限，保证句子完整）
+    limit = int(per_line * 1.6)
+    if len(s) > limit:
+        truncated = s[:limit]
+        for punct in ["。", "！", "？", "；", "，"]:
+            pos = truncated.rfind(punct)
+            if pos >= limit * 0.5:
+                truncated = truncated[:pos + 1]
+                break
+        else:
+            truncated = truncated.rstrip("，。；：、！？,.!:;") + "。"
+        s = truncated
+    return s
+
+
 def rule_summary(news_items, per_section=None, per_line=None):
-    """无 LLM 时的降级方案：按分类+重要性评分筛选，生成摘要。
+    """无 LLM 时的降级方案：按分类+重要性评分筛选，生成一句话新闻。
 
     改进：
     - 使用 importance_score 对新闻排序（政治/重大事件优先）
     - 社会新闻归入"热点"
     - 跨分类模糊去重（同一事件不同报道只保留一条）
-    - 每个分类严格取 per_section 条
+    - AI 全失效时信息量补偿：每栏取 per_section + FALLBACK_EXTRA_PER_SECTION 条
     """
     per_section = per_section or NEWS_PER_SECTION
     per_line = per_line or NEWS_PER_LINE
+    total = per_section + FALLBACK_EXTRA_PER_SECTION
 
     grouped = {"国际": [], "国内": [], "热点": []}
     for n in news_items:
@@ -578,7 +610,7 @@ def rule_summary(news_items, per_section=None, per_line=None):
     # 按优先级选：国内→国际→热点
     for sec in ["国内", "国际", "热点"]:
         for n in grouped[sec]:
-            if len(result[sec]) >= per_section:
+            if len(result[sec]) >= total:
                 break
             norm = normalize_title(n["title"])
             if _is_duplicate(n):
@@ -588,12 +620,12 @@ def rule_summary(news_items, per_section=None, per_line=None):
 
     # 如果某组不足，从其他组的溢出新闻中按分数补充
     for sec in SECTIONS:
-        if len(result[sec]) < per_section:
+        if len(result[sec]) < total:
             for other_sec in SECTIONS:
                 if other_sec == sec:
                     continue
                 for n in grouped[other_sec]:
-                    if len(result[sec]) >= per_section:
+                    if len(result[sec]) >= total:
                         break
                     norm = normalize_title(n["title"])
                     if _is_duplicate(n):
@@ -601,7 +633,7 @@ def rule_summary(news_items, per_section=None, per_line=None):
                     result[sec].append(n)
                     used.append((norm, n.get("summary") or ""))
 
-    # 生成 markdown
+    # 生成 markdown（一句话新闻，完整性优先）
     lines = []
     for sec in SECTIONS:
         items = result[sec]
@@ -609,22 +641,8 @@ def rule_summary(news_items, per_section=None, per_line=None):
             continue
         lines.append(f"【{sec}】")
         lines.append("")
-        for i, n in enumerate(items[:per_section], 1):
-            summary = n.get("summary") or ""
-            if not summary:
-                summary = n["title"]
-            if len(summary) > per_line:
-                # 智能截断：在标点处断句
-                truncated = summary[:per_line]
-                for punct in ["。", "！", "？", "，", "；"]:
-                    pos = truncated.rfind(punct)
-                    if pos >= per_line * 0.5:
-                        truncated = truncated[:pos + 1]
-                        break
-                else:
-                    truncated = truncated.rstrip("，。；：、！？,.!:;")
-                summary = truncated
-            lines.append(f"{i}. **{n['title']}**：{summary}")
+        for i, n in enumerate(items[:total], 1):
+            lines.append(f"{i}. **{n['title']}**：{_one_line_summary(n, per_line)}")
             lines.append("")
     return "\n".join(lines).strip()
 
