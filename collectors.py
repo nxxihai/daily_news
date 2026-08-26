@@ -225,68 +225,61 @@ def collect_tianapi():
     return news
 
 
-# ---------- 聚合数据（需 key，AI新闻简报） ----------
-# 接口文档：https://apis.juhe.cn/fapigw/aibrief/list
-JUHE_NEWS_URL = "https://apis.juhe.cn/fapigw/aibrief/list"
-# type 映射：AI新闻简报的 type 值 → 早报分类或"_skip"（直接跳过）
+# ---------- 聚合数据（需 key，头条新闻列表） ----------
+# 接口文档：https://www.juhe.cn/docs/api/id/235 （头条新闻）
+# 注意：聚合的 key 按接口开通；此 key 已开通"头条新闻"，未开通"AI新闻简报"
+JUHE_NEWS_URL = "https://v.juhe.cn/toutiao/index"
+# type 映射：头条新闻的 type 值 → 早报分类或"_skip"（直接跳过）
 JUHE_TYPE_MAP = {
-    "hot": "热点",
-    "tech": "科技",
-    "money": "财经",
-    "war": "军事",
-    "sports": "_skip",    # 体育新闻降权跳过
-    "ent": "_skip",       # 娱乐新闻直接跳过
-    "auto": "科技",       # 汽车归入科技
-    "game": "_skip",      # 游戏新闻直接跳过
-    "mobile": "科技",
-    "digi": "科技",
-    "world": "国际",      # 如果有的话
-    "society": "社会",    # 社会新闻
+    "top": "国内",        # 头条
+    "guonei": "国内",
+    "guoji": "国际要闻",
+    "shehui": "社会",
+    "junshi": "国际",     # 军事归国际
+    "keji": "科技",
+    "caijing": "财经",
+    "yule": "_skip",      # 娱乐直接跳过
+    "tiyu": "_skip",      # 体育跳过
+    "youxi": "_skip",     # 游戏跳过
+    "qiche": "科技",      # 汽车归科技
 }
 
 
 def collect_juhe():
-    """聚合数据 AI 新闻简报接口，只请求 1 次取全部新闻（节省免费版额度）。"""
+    """聚合数据头条新闻接口，按分类各取少量（节省免费版额度）。"""
     if not JUHE_KEY:
         print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册后获取）")
         return []
     news = []
-    try:
-        resp = _get(
-            JUHE_NEWS_URL,
-            params={"key": JUHE_KEY, "page_size": 20},
-            timeout=10,
-        )
-        data = resp.json()
-        if data.get("error_code") != 0:
-            print(f"[juhe] 返回错误：{data.get('reason')}")
-            return news
-        result = data.get("result") or {}
-        items = result.get("list") or []
-        print(f"[juhe] 采到 {len(items)} 条")
-        for item in items:
-            title = str(item.get("title", "")).strip()
-            if not title:
-                continue
-            summary = str(item.get("summary", "") or "").strip()
-            raw_type = str(item.get("type", "")).strip()
-            cat = JUHE_TYPE_MAP.get(raw_type, "国内")
-            # 跳过的分类
-            if cat == "_skip":
-                continue
-            # 军事 → 国际
-            if cat == "军事":
-                cat = "国际"
-            news.append(
-                {
-                    "title": title,
-                    "summary": summary,
-                    "source": str(item.get("author_name", "聚合数据") or "聚合数据").strip(),
-                    "category": cat,
-                }
+    for raw_type, default_cat in JUHE_TYPE_MAP.items():
+        if default_cat == "_skip":
+            continue
+        try:
+            resp = _get(
+                JUHE_NEWS_URL,
+                params={"key": JUHE_KEY, "type": raw_type, "page_size": 10},
+                timeout=10,
             )
-    except Exception as exc:
-        print(f"[juhe] 采集失败：{exc}")
+            data = resp.json()
+            if data.get("error_code") != 0:
+                print(f"[juhe] type={raw_type} 返回错误：{data.get('reason')}")
+                continue
+            items = (data.get("result") or {}).get("data") or []
+            for item in items:
+                title = str(item.get("title", "")).strip()
+                if not title:
+                    continue
+                news.append(
+                    {
+                        "title": title,
+                        "summary": "",
+                        "source": str(item.get("author_name", "聚合数据") or "聚合数据").strip(),
+                        "category": default_cat,
+                    }
+                )
+        except Exception as exc:
+            print(f"[juhe] type={raw_type} 采集失败：{exc}")
+    print(f"[juhe] 采到 {len(news)} 条")
     return news
 
 
