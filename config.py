@@ -18,7 +18,8 @@ import os
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY") or "6e3289c86b1e63a9d6aff2af1be34b16"
 
 # 聚合数据：https://www.juhe.cn/ 注册（需实名认证）后拿 key
-JUHE_KEY = os.environ.get("JUHE_KEY") or "b569e931c55389e18e561b3d8476703a"
+# 旧 key 已失效且仓库公开，不再写死；本地想用请设环境变量 JUHE_KEY，云端走 GitHub Secret
+JUHE_KEY = os.environ.get("JUHE_KEY") or ""
 
 
 # ================= AI 提炼（按顺序尝试，第一个成功即启用） =================
