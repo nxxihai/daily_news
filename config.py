@@ -2,7 +2,7 @@
 
 所有 key 在此填写，填了才启用对应功能：
 - 新闻源：天行数据 / 聚合数据（百度热搜、新浪新闻无需 key，开箱即用）
-- AI 提炼：OpenRouter 免费模型 / 本地 Ollama / DeepSeek（按顺序尝试，自动降级）
+- AI 提炼：DeepSeek 官方 / 智谱 GLM / OpenRouter 免费模型 / 本地 Ollama（按顺序尝试，自动降级）
 - 推送：Server酱 + PushPlus 双通道（主通道挂了自动切备用）
 
 运行方式：
@@ -23,60 +23,59 @@ JUHE_KEY = os.environ.get("JUHE_KEY") or "b569e931c55389e18e561b3d8476703a"
 
 # ================= AI 提炼（按顺序尝试，第一个成功即启用） =================
 LLM_PROVIDERS = [
-    # DeepSeek 官方：质量稳定、海外访问顺畅，云端首选
-    # 默认读取系统环境变量 OPENAI_API_KEY（你智能伴侣项目里已在用），也可直接填 key
+    # 0. 魔搭 ModelScope：国内直连、免费额度，中文强，优先使用（替代原 DeepSeek 官方）
+    # base_url 是 OpenAI 兼容的推理 API 地址；model 用免费的 Step-3.7-Flash（阶跃星辰）
+    # 更多可用模型：deepseek-ai/DeepSeek-V4-Flash-0731 / ZhipuAI/GLM-4.7-Flash / Qwen/Qwen3-8B
     {
-        "base_url": "https://api.deepseek.com",
-        "api_key": os.environ.get("OPENAI_API_KEY") or "",
-        "model": "deepseek-v4-flash",
-        "timeout": 40,  # 云端海外节点访问 DeepSeek 较慢，放宽到 40s；本地直连更快
+        "base_url": "https://api-inference.modelscope.cn/v1",
+        "api_key": os.environ.get("MODELSCOPE_API_KEY") or "",
+        "model": "stepfun-ai/Step-3.7-Flash",
+        "timeout": 60,
+        "max_retries": 2,
     },
-    # DeepSeek 海外备选：走 OpenRouter（海外节点访问 OpenRouter 快），官方 API 超时时兜底
-    # 免费版 :free 后缀模型常因限流/下架报 404，改用付费版模型 ID（按量计费，很便宜）
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "deepseek/deepseek-r1",                   # R1 标准版（非 :free），可用性高
-        "timeout": 30,  # 云端主要靠它兜底，放宽到 30s
-    },
-    # 智谱 GLM-4.7-Flash：永久免费、中文强（国内网络好用；GitHub Actions 海外节点常超时）
-    # 注册 https://open.bigmodel.cn/ 实名后拿 key，配到环境变量 ZHIPU_API_KEY
-    # 云端跑会 fallback 到 DeepSeek；本地跑时 network 好，可以优先用它
+    # 1. 智谱 GLM-4-Flash：永久免费、中文强（国内网络好用；海外节点可能超时）
     {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_key": os.environ.get("ZHIPU_API_KEY") or "",
-        "model": "glm-4.7-flash",
-        "timeout": 25,  # 放宽到 25s，海外节点偶尔能连上
-    },
-    # OpenRouter 免费模型（DeepSeek 失败时的备选）
-    # 免费模型是共享池，高峰期可能被限流(429)，故配置多个候选，失败自动换下一个
-    # 可在官网 https://openrouter.ai/models 挑其他 :free 结尾的模型追加
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "deepseek/deepseek-v4-flash",            # DeepSeek V4 Flash 标准版
+        "model": "glm-4-flash",
         "timeout": 30,
+        "max_retries": 2,
+    },
+    # 3. OpenRouter DeepSeek V3 免费版（可能限流，作为备选）
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "model": "deepseek/deepseek-chat-v3-0324:free",
+        "timeout": 30,
+        "max_retries": 1,
+    },
+    # 4. OpenRouter 其他免费模型（DeepSeek 失败时的备选）
+    {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
+        "model": "z-ai/glm-4.7-flash:free",
+        "timeout": 20,
+        "max_retries": 1,
     },
     {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "z-ai/glm-5.2:free",                      # GLM 5.2 中文强
-        "timeout": 15,
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "timeout": 20,
+        "max_retries": 1,
     },
-    {
-        "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY") or "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",
-        "model": "nvidia/nemotron-3.5-lightning:free",    # NVIDIA 快速模型
-        "timeout": 15,
-    },
-    # 本地 Ollama（可选）：装了 Ollama 并 pull 了模型即可用，完全免费离线
+    # 5. 本地 Ollama（可选）：装了 Ollama 并 pull 了模型即可用，完全免费离线
     {
         "base_url": "http://localhost:11434/v1",
         "api_key": "ollama",
-        "model": "qwen3:8b",\
-        "timeout": 10,
+        "model": "qwen3:8b",
+        "timeout": 60,
+        "max_retries": 0,
     },
 ]
+
+# LLM 调用重试等待时间（秒），指数退避
+RETRY_BASE_DELAY = 3
 
 
 # ================= 微信推送 =================

@@ -8,9 +8,9 @@
 #   OPENROUTER_API_KEY OpenRouter key（你 config.py 里那串 sk-or-v1-...）
 #   SERVERCHAN_KEY    Server酱 SendKey（你 config.py 里那串 SCT...）
 #   ZHIPU_API_KEY     智谱 GLM-4.7-Flash key（永久免费）
+#   MODELSCOPE_API_KEY 魔搭 ModelScope key（主模型 stepfun-ai/Step-3.7-Flash）
 #   JUHE_KEY          可选，聚合数据 key，没有可留空不填
 #   PUSHPLUS_TOKEN    可选，PushPlus token，没有可留空不填
-#   OPENAI_API_KEY    可选，DeepSeek 官方 key，没有可留空不填
 # 没填的环境变量会自动回退到 config.py 里的默认值，本地照常、云端不中断。
 
 name: Daily News Report
@@ -53,8 +53,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          MODELSCOPE_API_KEY: ${{ secrets.MODELSCOPE_API_KEY }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python run_daily.py
 
       - name: Save dedup state back to repo

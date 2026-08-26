@@ -38,6 +38,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from collectors import collect_all  # noqa: E402
 from filter import (  # noqa: E402
     filter_fresh,
+    filter_quality,
     is_gossip,
     load_seen,
     mark_seen,
@@ -64,11 +65,12 @@ def main(dry_run=False):
     # 2. 过滤（黑名单 + 跨天去重）
     seen = load_seen(SEEN_FILE)
     n_raw = len(news)
-    news = [n for n in news if not is_gossip(n["title"])]
+    # 综合过滤：花边/游戏/个股期货研报
+    news = filter_quality(news)
     n_clean = len(news)
     fresh = filter_fresh(news, seen)
     print(
-        f"[run] 采集 {n_raw} 条 → 过滤花边后 {n_clean} 条 → 去重后 {len(fresh)} 条"
+        f"[run] 采集 {n_raw} 条 → 过滤低质后 {n_clean} 条 → 去重后 {len(fresh)} 条"
     )
 
     if not fresh:

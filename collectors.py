@@ -1,9 +1,12 @@
-"""多源新闻采集：百度热搜（免key）/ 天行数据 / 聚合数据。
+"""多源新闻采集：百度热搜（免key）/ 天行数据 / 聚合数据 / 新浪滚动新闻。
 
 每个采集器独立，失败只影响自身，collect_all() 汇总所有可用源的数据。
 返回的新闻统一为字典：
     {"title": 标题, "summary": 摘要/描述, "source": 来源, "category": 分类}
-分类取值：国际 / 国内 / 社会 / 财经 / 科技 / 军事 / 热点
+分类取值：国际要闻 / 国内 / 社会 / 财经 / 科技 / 军事 / 热点
+
+注意：外国科技公司名（苹果/特斯拉/英伟达等）不等于国际要闻，
+不应仅因为标题出现公司名就归为国际新闻。国际要闻是政治/外交/军事/重大社会事件。
 """
 
 import json
@@ -34,7 +37,7 @@ BAIDU_HOT_URL = "https://top.baidu.com/board?tab=realtime"
 
 
 def collect_baidu_hot():
-    """抓取百度实时热搜榜，全部标为「热点」。"""
+    """抓取百度实时热搜榜，全部标为「热点」（社会新闻/热议话题为主）。"""
     resp = _get(BAIDU_HOT_URL)
     html = resp.text
 
@@ -61,36 +64,89 @@ def collect_baidu_hot():
     return news
 
 
-# ---------- 新浪滚动新闻（免 key，国际/科技/财经） ----------
+# ---------- 新浪滚动新闻（免 key，国际/国内/财经/科技/社会） ----------
 
 SINA_ROLL_URL = "https://feed.mix.sina.com.cn/api/roll/get"
 SINA_HEADERS = {"User-Agent": UA, "Referer": "https://news.sina.com.cn/"}
 
-# 标题中出现这些词 → 国际要闻；否则归国内。新浪 lid 分类不纯，用关键词粗分
+# 【重要】国际要闻关键词：仅政治、外交、军事、重大国际事件
+# 不要包含外国科技公司名（苹果/特斯拉/英伟达/三星等）——那是财经/科技新闻，不是国际要闻
 INTERNATIONAL_KEYWORDS = [
     "美国", "英国", "法国", "德国", "俄罗斯", "日本", "韩国", "朝鲜",
     "欧盟", "北约", "伊朗", "以色列", "乌克兰", "印度", "澳大利亚",
     "加拿大", "土耳其", "沙特", "泰国", "越南", "新加坡", "巴西", "墨西哥",
-    "特朗普", "普京", "马克龙", "泽连斯基", "内塔尼亚胡", "联合国", "世卫",
-    "美元", "欧元", "日元", "全球", "国际", "白宫", "克里姆林宫", "五角大楼",
-    "英伟达", "特斯拉", "苹果", "谷歌", "微软", "OpenAI", "Anthropic",
-    "三星", "SK海力士", "台积电", "ASML", "欧洲", "中东", "非洲", "亚洲",
+    "巴勒斯坦", "黎巴嫩", "叙利亚", "伊拉克", "阿富汗", "巴基斯坦",
+    "南非", "埃及", "尼日利亚", "肯尼亚", "印尼", "菲律宾", "马来西亚",
+    "意大利", "西班牙", "葡萄牙", "荷兰", "比利时", "瑞士", "瑞典", "挪威",
+    "丹麦", "芬兰", "波兰", "匈牙利", "奥地利", "希腊", "捷克", "罗马尼亚",
+    "阿根廷", "智利", "秘鲁", "哥伦比亚", "委内瑞拉", "古巴",
+    "特朗普", "拜登", "普京", "马克龙", "泽连斯基", "内塔尼亚胡", "金正恩",
+    "莫迪", "苏纳克", "岸田", "朔尔茨", "埃尔多安", "哈梅内伊",
+    "联合国", "世卫", "世贸", "国际货币基金", "世界银行",
+    "白宫", "克里姆林宫", "五角大楼", "国会", "参议院", "众议院",
+    "唐宁街", "爱丽舍宫", "青瓦台", "首相官邸",
+    "美元", "欧元", "日元", "英镑", "人民币汇率",
+    "全球", "国际", "海外", "中东", "非洲", "拉美", "东南亚", "南亚",
+    "外交", "大使", "领事", "条约", "协议", "峰会", "会晤", "访问",
+    "制裁", "关税", "贸易战", "冲突", "战争", "军事", "空袭", "导弹",
+    "核武", "核试验", "恐怖袭击", "人质", "难民", "移民", "政变",
+    "地震", "海啸", "火山", "飓风", "台风", "洪水", "灾荒",
+    "G7", "G20", "APEC", "金砖", "上合", "东盟", "非盟",
+]
+
+# 国内社会新闻关键词（用于新浪分类修正）
+DOMESTIC_SOCIAL_KEYWORDS = [
+    "警方", "通报", "抓获", "破获", "案件", "事故", "遇难", "受伤",
+    "火灾", "爆炸", "车祸", "坠楼", "跳楼", "溺水", "失踪", "失联",
+    "救援", "搜救", "被困", "获救", "地震", "台风", "暴雨", "洪水",
+    "幼儿园", "小学", "中学", "大学", "医院", "医生", "护士", "患者",
+    "食品", "药品", "疫苗", "假货", "诈骗", "传销", "盗窃", "抢劫",
+    "城管", "拆迁", "物业", "业主", "维权", "上访", "举报", "处罚",
+    "工资", "拖欠", "裁员", "失业", "就业", "社保", "医保", "养老",
 ]
 
 
-def _sina_category(title, default):
-    if any(kw in title for kw in INTERNATIONAL_KEYWORDS):
+def _sina_category(title, default_cat):
+    """根据标题关键词修正新浪新闻分类。
+
+    - 国际关键词 → 国际要闻
+    - 社会新闻关键词 → 社会（归入热点栏）
+    - 其他保留源分类
+    """
+    # 先检查是否真的是国际要闻（排除外国公司名干扰）
+    intl_hits = sum(1 for kw in INTERNATIONAL_KEYWORDS if kw in title)
+    if intl_hits >= 1:
+        # 国际关键词命中，归国际要闻
+        # 注意：如"中国回应美国制裁"这类新闻虽然涉及中国，但核心是国际关系
         return "国际要闻"
-    return default
+    # 社会新闻判断（只对"国内"频道的新闻做修正，不改变其他频道分类）
+    social_hits = sum(1 for kw in DOMESTIC_SOCIAL_KEYWORDS if kw in title)
+    if social_hits >= 1 and default_cat in ("国内", "社会"):
+        return "社会"
+    return default_cat
 
 
 def collect_sina():
-    """新浪滚动新闻接口（免 key）：2516 国际要闻 / 2515 科技 / 2509 财经要闻。"""
+    """新浪滚动新闻接口（免 key）。
+
+    经实际测试，正确 lid 对应频道：
+      2511 国际要闻 / 2514 国际军事 / 2510 国内综合 / 2669 社会
+      2509 财经 / 2515 科技
+    错误 lid（废弃）：2512彩票 / 2513娱乐 / 2516商品期货 / 2517港股 / 2518加密货币
+    """
     import random
 
     news = []
-    channels = [("2516", "国际要闻"), ("2515", "科技"), ("2509", "财经要闻")]
-    for lid, default_cat in channels:
+    # 频道配置：(lid, 默认分类, 条数)
+    channels = [
+        ("2511", "国际要闻", 15),  # 国际要闻（主）
+        ("2514", "国际要闻", 10),  # 国际军事/外交
+        ("2510", "国内", 15),      # 国内综合
+        ("2669", "社会", 15),      # 社会/热点
+        ("2509", "财经要闻", 8),   # 财经（少量，个股已被filter过滤）
+        ("2515", "科技", 8),       # 科技（少量）
+    ]
+    for lid, default_cat, num in channels:
         try:
             resp = requests.get(
                 SINA_ROLL_URL,
@@ -98,9 +154,9 @@ def collect_sina():
                     "pageid": "153",
                     "lid": lid,
                     "k": "",
-                    "num": "15",
+                    "num": str(num),
                     "page": "1",
-                    "_": str(random.randint(10**13, 10**14)),  # 随机参数绕过接口缓存
+                    "_": str(random.randint(10**13, 10**14)),
                 },
                 headers=SINA_HEADERS,
                 timeout=12,
@@ -110,12 +166,14 @@ def collect_sina():
                 title = str(item.get("title", "")).strip()
                 if not title:
                     continue
+                # 根据标题关键词修正分类
+                cat = _sina_category(title, default_cat)
                 news.append(
                     {
                         "title": title,
                         "summary": str(item.get("intro", "") or "").strip(),
                         "source": "新浪新闻",
-                        "category": _sina_category(title, default_cat),
+                        "category": cat,
                     }
                 )
         except Exception as exc:
@@ -123,18 +181,20 @@ def collect_sina():
     return news
 
 
-# ---------- 天行数据（需 key，通用新闻接口 generalnews） ----------
+# ---------- 天行数据（需 key，综合新闻接口） ----------
 # 接口文档：https://www.tianapi.com/apiview/235  （综合新闻查询）
-# 一次拉取最新资讯，返回数据无分类字段，用标题关键词粗分国际/国内
 TIANAPI_NEWS_URL = "https://apis.tianapi.com/generalnews/index"
-CATEGORY_CN = {
-    "guoji": "国际",
-    "guonei": "国内",
-    "shehui": "社会",
-    "caijing": "财经",
-    "keji": "科技",
-    "junshi": "军事",
-}
+
+
+def _tianapi_category(title):
+    """天行数据无分类字段，用关键词粗分。"""
+    intl_hits = sum(1 for kw in INTERNATIONAL_KEYWORDS if kw in title)
+    social_hits = sum(1 for kw in DOMESTIC_SOCIAL_KEYWORDS if kw in title)
+    if intl_hits > social_hits:
+        return "国际"
+    if social_hits > 0:
+        return "社会"
+    return "国内"
 
 
 def collect_tianapi():
@@ -157,9 +217,7 @@ def collect_tianapi():
                     "title": title,
                     "summary": str(item.get("description", "") or "").strip(),
                     "source": str(item.get("source", "") or "天行数据"),
-                    "category": (
-                        "国际" if any(kw in title for kw in INTERNATIONAL_KEYWORDS) else "国内"
-                    ),
+                    "category": _tianapi_category(title),
                 }
             )
     except Exception as exc:
@@ -167,30 +225,28 @@ def collect_tianapi():
     return news
 
 
-# ---------- 聚合数据（需 key，分类 type 查询） ----------
-# 使用「AI新闻简报」接口（ID: 850），文档：https://apis.juhe.cn/fapigw/aibrief/list
+# ---------- 聚合数据（需 key，AI新闻简报） ----------
+# 接口文档：https://apis.juhe.cn/fapigw/aibrief/list
 JUHE_NEWS_URL = "https://apis.juhe.cn/fapigw/aibrief/list"
-# type 映射：AI新闻简报的 type 值 → 早报分类
+# type 映射：AI新闻简报的 type 值 → 早报分类或"_skip"（直接跳过）
 JUHE_TYPE_MAP = {
     "hot": "热点",
     "tech": "科技",
     "money": "财经",
     "war": "军事",
-    "sports": "体育",
-    "ent": "娱乐",
-    "auto": "汽车",
-    "game": "游戏",
+    "sports": "_skip",    # 体育新闻降权跳过
+    "ent": "_skip",       # 娱乐新闻直接跳过
+    "auto": "科技",       # 汽车归入科技
+    "game": "_skip",      # 游戏新闻直接跳过
     "mobile": "科技",
     "digi": "科技",
+    "world": "国际",      # 如果有的话
+    "society": "社会",    # 社会新闻
 }
 
 
 def collect_juhe():
-    """聚合数据 AI 新闻简报接口，只请求 1 次取全部新闻（节省免费版额度）。
-
-    接口返回结构：result.list（新闻数组），每条含 title / summary / type 等字段。
-    type 参数不填时返回全部类型，page_size 最大 20（文档限制）。
-    """
+    """聚合数据 AI 新闻简报接口，只请求 1 次取全部新闻（节省免费版额度）。"""
     if not JUHE_KEY:
         print("[juhe] 未配置 JUHE_KEY，跳过聚合数据（https://www.juhe.cn/ 注册后获取）")
         return []
@@ -198,7 +254,7 @@ def collect_juhe():
     try:
         resp = _get(
             JUHE_NEWS_URL,
-            params={"key": JUHE_KEY, "page_size": 20},  # 不指定 type，取全部；page_size 最大 20
+            params={"key": JUHE_KEY, "page_size": 20},
             timeout=10,
         )
         data = resp.json()
@@ -212,15 +268,15 @@ def collect_juhe():
             title = str(item.get("title", "")).strip()
             if not title:
                 continue
-            # AI新闻简报字段名：summary（摘要）、author_name（来源）
             summary = str(item.get("summary", "") or "").strip()
             raw_type = str(item.get("type", "")).strip()
-            # 映射到早报分类：国际/国内/热点；未知类型按 JUHE_TYPE_MAP 或归国内
             cat = JUHE_TYPE_MAP.get(raw_type, "国内")
-            if cat in ("军事",):
+            # 跳过的分类
+            if cat == "_skip":
+                continue
+            # 军事 → 国际
+            if cat == "军事":
                 cat = "国际"
-            elif cat in ("科技", "财经", "体育", "娱乐", "汽车", "游戏"):
-                cat = "国内"
             news.append(
                 {
                     "title": title,
@@ -240,10 +296,10 @@ def collect_all():
     """依次采集所有启用的源，合并返回。单个源失败不影响整体。"""
     all_news = []
     collectors = [
-        ("聚合数据", collect_juhe),
-        ("百度热搜", collect_baidu_hot),
         ("新浪新闻", collect_sina),
+        ("百度热搜", collect_baidu_hot),
         ("天行数据", collect_tianapi),
+        ("聚合数据", collect_juhe),
     ]
     for name, func in collectors:
         try:
@@ -264,6 +320,6 @@ if __name__ == "__main__":
         counts[n["category"]] = counts.get(n["category"], 0) + 1
     for k, v in counts.items():
         print(f"  {k}：{v} 条")
-    print("\n前 10 条预览：")
-    for n in news[:10]:
+    print("\n前 15 条预览：")
+    for n in news[:15]:
         print(f"  [{n['category']}] {n['title']}（{n['source']}）")
