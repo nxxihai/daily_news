@@ -311,22 +311,22 @@ def _deduplicate_sections(sections):
             if norm not in seen_exact:
                 seen_exact[norm] = (sec, title, summary)
 
-    # 第二步：按分类组装，同分类内相似标题去重
+    # 第二步：按优先级组装，全局同事件去重（跨分类+同分类内）
+    # 同一事件即使被 LLM 分到不同分类、标题措辞不同，也只保留一条
     result = {sec: [] for sec in SECTIONS}
-    for sec in SECTIONS:
-        used_norms = []
+    used = []  # [(norm_title, summary)]
+    for sec in sorted(SECTIONS, key=lambda s: priority.get(s, 99)):
         for norm, (keeper_sec, title, summary) in seen_exact.items():
             if keeper_sec != sec:
                 continue
-            # 同分类内相似标题去重（阈值0.5：公共子串占短标题50%以上视为同一事件）
             is_dup = False
-            for used in used_norms:
-                if _is_similar_title(norm, used, threshold=0.5):
+            for used_t, used_s in used:
+                if _is_same_event(norm, summary, used_t, used_s):
                     is_dup = True
                     break
             if not is_dup:
                 result[sec].append((title, summary))
-                used_norms.append(norm)
+                used.append((norm, summary))
 
     return {k: v for k, v in result.items() if v}
 
@@ -455,31 +455,80 @@ def parse_markdown(text):
     return sections
 
 
+def _longest_common_substring_len(s1, s2):
+    """最长公共子串长度。标题很短（几十字），O(n*m) 无性能问题。"""
+    if not s1 or not s2:
+        return 0
+    prev = [0] * (len(s2) + 1)
+    best = 0
+    for i in range(1, len(s1) + 1):
+        cur = [0] * (len(s2) + 1)
+        ci = s1[i - 1]
+        for j in range(1, len(s2) + 1):
+            if ci == s2[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
 def _is_similar_title(norm1, norm2, threshold=0.6):
     """判断两个归一化标题是否相似（同一事件的不同报道）。
 
     判定规则：
     1. 一个包含另一个 → 相似
-    2. 有连续6个相同字符，且占短标题比例 >= threshold → 相似
+    2. 最长公共子串占短标题比例 >= threshold → 相似
+    3. 同事件指纹：共享核心短语(>=4字) + 共享数字 → 相似
+       （如"冷藏车"事故的不同角度报道都含"8"，应视为同一事件）
     """
     if not norm1 or not norm2:
         return False
-    # 一个包含另一个，且较长的那个不长于短的1.5倍
-    if norm1 in norm2 and len(norm2) < len(norm1) * 1.5:
+    if norm1 in norm2 or norm2 in norm1:
         return True
-    if norm2 in norm1 and len(norm1) < len(norm2) * 1.5:
-        return True
-    # 检查公共子串：连续6个相同字符即认为可能是同一事件
     short, long_ = (norm1, norm2) if len(norm1) <= len(norm2) else (norm2, norm1)
-    if len(short) < 4:
-        return False
-    min_common = 6 if len(short) >= 8 else 4
-    for i in range(len(short) - min_common + 1):
-        sub = short[i:i + min_common]
-        if sub in long_:
-            # 公共子串占短标题的比例
-            if len(sub) / len(short) >= threshold:
-                return True
+    lcs = _longest_common_substring_len(short, long_)
+    if lcs >= 6 and lcs / len(short) >= threshold:
+        return True
+    # 同事件指纹：核心短语相同且数字相同（伤亡人数/年份等），即使报道角度不同
+    # 如"冷藏车"(3字)事故的多篇报道都含"8"，应视为同一事件
+    if lcs >= 3 and set(re.findall(r"\d+", norm1)) & set(re.findall(r"\d+", norm2)):
+        return True
+    return False
+
+
+_BOILERPLATE_RE = re.compile(
+    r"^(?:新浪|搜狐|网易|腾讯|央视|人民网|新华网|澎湃新闻|界面新闻|财联社)?"
+    r"(?:科技|财经|数码|汽车|证券)?讯.*?消息[，,。]?"
+)
+
+
+def _clean_for_compare(s):
+    """去掉"新浪科技讯8月25日晚间消息，"这类讯头，避免误判同事件。"""
+    return _BOILERPLATE_RE.sub("", s or "").strip()
+
+
+def _is_same_event(t1, s1, t2, s2):
+    """判断两条新闻是否为同一事件（标题或摘要任一相似即算）。
+
+    规则：
+    1. 标题相似（_is_similar_title）→ 同事件
+    2. 标题或摘要有 >=5 字公共短语（如相同地点+主体"河南平顶山"）→ 同事件
+    3. 共享数字（伤亡人数等）+ >=3 字核心短语（去数字后比较）→ 同事件
+    """
+    if _is_similar_title(t1, t2):
+        return True
+    s1c, s2c = _clean_for_compare(s1), _clean_for_compare(s2)
+    lcs_t = _longest_common_substring_len(t1, t2)
+    lcs_s = _longest_common_substring_len(s1c, s2c)
+    if max(lcs_t, lcs_s) >= 5:
+        return True
+    nums = set(re.findall(r"\d+", t1 + s1)) & set(re.findall(r"\d+", t2 + s2))
+    if nums:
+        lt = _longest_common_substring_len(re.sub(r"\d+", "", t1), re.sub(r"\d+", "", t2))
+        ls = _longest_common_substring_len(re.sub(r"\d+", "", s1c), re.sub(r"\d+", "", s2c))
+        if max(lt, ls) >= 3:
+            return True
     return False
 
 
@@ -515,13 +564,14 @@ def rule_summary(news_items, per_section=None, per_line=None):
         grouped[sec].sort(key=importance_score, reverse=True)
 
     # 跨组去重（同一新闻/同一事件可能因分类模糊被放入多组）
-    used_norms = []
+    used = []  # [(norm_title, summary)]
     result = {"国际": [], "国内": [], "热点": []}
 
-    def _is_duplicate(title):
-        norm = normalize_title(title)
-        for used in used_norms:
-            if _is_similar_title(norm, used):
+    def _is_duplicate(n):
+        norm = normalize_title(n["title"])
+        summary = n.get("summary") or ""
+        for used_t, used_s in used:
+            if _is_same_event(norm, summary, used_t, used_s):
                 return True
         return False
 
@@ -531,9 +581,9 @@ def rule_summary(news_items, per_section=None, per_line=None):
             if len(result[sec]) >= per_section:
                 break
             norm = normalize_title(n["title"])
-            if _is_duplicate(n["title"]):
+            if _is_duplicate(n):
                 continue
-            used_norms.append(norm)
+            used.append((norm, n.get("summary") or ""))
             result[sec].append(n)
 
     # 如果某组不足，从其他组的溢出新闻中按分数补充
@@ -546,10 +596,10 @@ def rule_summary(news_items, per_section=None, per_line=None):
                     if len(result[sec]) >= per_section:
                         break
                     norm = normalize_title(n["title"])
-                    if _is_duplicate(n["title"]):
+                    if _is_duplicate(n):
                         continue
                     result[sec].append(n)
-                    used_norms.append(norm)
+                    used.append((norm, n.get("summary") or ""))
 
     # 生成 markdown
     lines = []
