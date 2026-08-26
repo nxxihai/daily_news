@@ -398,18 +398,18 @@ def sections_to_markdown(sections, per_line=None):
             s = summary.strip()
             # 去掉残留的markdown标记
             s = s.replace("**", "").replace("*", "").strip()
-            # 去掉省略号结尾
-            s = s.rstrip("…...")
-            # 修复明显截断：以逗号、顿号结尾的，补"等"或去掉末尾标点
+            # 去掉尾部省略号（中英文省略号、连续句号等变体）
+            s = re.sub(r"[…。.]{2,}\s*$", "", s).rstrip("…。.")
+            # 修复明显截断：以逗号、顿号结尾的，去掉末尾标点
             while s and s[-1] in "，、；：":
                 s = s[:-1].rstrip()
             # 如果摘要没有句末标点，补一个句号
             if s and not re.search(r"[。！？]$", s):
                 s += "。"
-            # 如果摘要超过字数限制，智能截断（在标点处断句）
+            # 如果摘要超过字数限制，智能截断（只在句末标点处断句，绝不以逗号收尾）
             if len(s) > per_line:
                 truncated = s[:per_line]
-                for punct in ["。", "！", "？", "，", "；"]:
+                for punct in ["。", "！", "？"]:
                     pos = truncated.rfind(punct)
                     if pos >= per_line * 0.6:
                         truncated = truncated[:pos + 1]
@@ -419,8 +419,13 @@ def sections_to_markdown(sections, per_line=None):
                     if truncated and not re.search(r"[。！？]$", truncated):
                         truncated += "。"
                 s = truncated
-            # 如果摘要太短（只有几个字），用标题兜底
-            if len(s) < 5:
+            # 最终保险：任何情况下不以悬挂标点（逗号等）收尾
+            while s and s[-1] in "，、；：":
+                s = s[:-1].rstrip()
+            if s and not re.search(r"[。！？]$", s):
+                s += "。"
+            # 如果摘要太短（不足10字），可能被截断，用标题兜底
+            if len(s) < 10:
                 s = title + "。"
             lines.append(f"{i}. **{title}**：{s}")
             lines.append("")
