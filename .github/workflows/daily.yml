@@ -51,6 +51,7 @@ jobs:
 
       - name: Run daily news report
         env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TIANAPI_KEY: ${{ secrets.TIANAPI_KEY }}
           JUHE_KEY: ${{ secrets.JUHE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
