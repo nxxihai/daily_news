@@ -37,6 +37,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from collectors import collect_all  # noqa: E402
 from filter import (  # noqa: E402
+    filter_by_date,
     filter_fresh,
     filter_quality,
     is_gossip,
@@ -68,9 +69,11 @@ def main(dry_run=False):
     # 综合过滤：花边/游戏/个股期货研报
     news = filter_quality(news)
     n_clean = len(news)
+    news = filter_by_date(news)
+    n_date = len(news)
     fresh = filter_fresh(news, seen)
     print(
-        f"[run] 采集 {n_raw} 条 → 过滤低质后 {n_clean} 条 → 去重后 {len(fresh)} 条"
+        f"[run] 采集 {n_raw} 条 → 过滤低质后 {n_clean} 条 → 过滤旧闻后 {n_date} 条 → 去重后 {len(fresh)} 条"
     )
 
     if not fresh:

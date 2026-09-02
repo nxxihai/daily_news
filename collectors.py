@@ -109,15 +109,28 @@ DOMESTIC_SOCIAL_KEYWORDS = [
 def _sina_category(title, default_cat):
     """根据标题关键词修正新浪新闻分类。
 
-    - 国际关键词 → 国际要闻
+    - 国际关键词 → 国际要闻（但排除明显是国内社会/财经/文化/体育新闻）
     - 社会新闻关键词 → 社会（归入热点栏）
     - 其他保留源分类
     """
-    # 先检查是否真的是国际要闻（排除外国公司名干扰）
+    # 排除明显不是国际要闻的情况（即使有国际关键词）
+    # 注意：这些词单独出现不一定代表国内新闻，需结合上下文判断
+    NOT_INTERNATIONAL = [
+        "停车", "纠纷", "涉嫌", "贪腐", "被辞退", "被立案", "留置", "违纪",
+        "文化之春", "文化交流", "文化年", "艺术节", "展览", "画展", "演出",
+        "销量", "财报", "营收", "净利润", "盈利", "亏损", "股价", "市值",
+        "夺冠", "奥运会", "奥运", "网球", "篮球", "足球", "冠军", "亚军",
+        # "招募" "招聘" 去掉——日本/美国军队招募是国际新闻
+    ]
+    if any(kw in title for kw in NOT_INTERNATIONAL):
+        # 有排除词，不归国际要闻，按原分类或社会/国内处理
+        if default_cat in ("国内", "社会"):
+            return "社会"
+        return "国内"
+
+    # 检查是否真的是国际要闻
     intl_hits = sum(1 for kw in INTERNATIONAL_KEYWORDS if kw in title)
     if intl_hits >= 1:
-        # 国际关键词命中，归国际要闻
-        # 注意：如"中国回应美国制裁"这类新闻虽然涉及中国，但核心是国际关系
         return "国际要闻"
     # 社会新闻判断（只对"国内"频道的新闻做修正，不改变其他频道分类）
     social_hits = sum(1 for kw in DOMESTIC_SOCIAL_KEYWORDS if kw in title)
@@ -168,12 +181,17 @@ def collect_sina():
                     continue
                 # 根据标题关键词修正分类
                 cat = _sina_category(title, default_cat)
+                # 提取时间字段（ctime 是时间戳，time 是格式化时间）
+                ctime = item.get("ctime", "")
+                time_str = item.get("time", "")
                 news.append(
                     {
                         "title": title,
                         "summary": str(item.get("intro", "") or "").strip(),
                         "source": "新浪新闻",
                         "category": cat,
+                        "ctime": ctime,
+                        "time": time_str,
                     }
                 )
         except Exception as exc:
@@ -218,6 +236,8 @@ def collect_tianapi():
                     "summary": str(item.get("description", "") or "").strip(),
                     "source": str(item.get("source", "") or "天行数据"),
                     "category": _tianapi_category(title),
+                    # 天行免费接口常返回陈年缓存新闻，必须带时间字段供 filter 按日期硬过滤
+                    "ctime": str(item.get("ctime", "") or ""),
                 }
             )
     except Exception as exc:
@@ -275,11 +295,66 @@ def collect_juhe():
                         "summary": "",
                         "source": str(item.get("author_name", "聚合数据") or "聚合数据").strip(),
                         "category": default_cat,
+                        # 聚合头条返回 date 字段（如 2026-08-30 08:00），带上供日期硬过滤
+                        "ctime": str(item.get("date", "") or ""),
                     }
                 )
         except Exception as exc:
             print(f"[juhe] type={raw_type} 采集失败：{exc}")
     print(f"[juhe] 采到 {len(news)} 条")
+    return news
+
+
+# ---------- 联合早报（免 key，新加坡主流华文媒体，国际视角好） ----------
+# 官网 RSS 已停用，改为抓取即时频道页；国内可直连，失败不影响其他源
+
+ZAOBAO_PAGES = [
+    ("https://www.zaobao.com/realtime/china", "国内"),
+    ("https://www.zaobao.com/realtime/world", "国际要闻"),
+]
+
+# 正文链接形如 /news/china/story20260830-9597155，日期(YYYYMMDD)嵌在URL中
+_ZAOBAO_STORY_RE = re.compile(
+    r'<a[^>]+href="(/news/(?:china|world)/story(\d{8})-\d+)"[^>]*>(.*?)</a>',
+    re.S,
+)
+
+
+def collect_zaobao():
+    """抓取联合早报即时频道页，提取标题和日期（供日期硬过滤）。"""
+    news = []
+    for url, cat in ZAOBAO_PAGES:
+        try:
+            resp = _get(url, timeout=12)
+            resp.encoding = "utf-8"
+            seen = set()
+            for m in _ZAOBAO_STORY_RE.finditer(resp.text):
+                href, date8, inner = m.groups()
+                if href in seen:
+                    continue
+                seen.add(href)
+                # 标题在 <a> 内，需去掉 lit 注释和 HTML 标签
+                title = re.sub(r"<!--.*?-->", "", inner, flags=re.S)
+                title = re.sub(r"<[^>]+>", "", title)
+                title = re.sub(r"\s+", " ", title).strip()
+                if len(title) < 6:
+                    continue
+                # URL 中的日期转时间戳，供 filter 按日期硬过滤
+                try:
+                    ts = str(int(datetime.strptime(date8, "%Y%m%d").timestamp()))
+                except ValueError:
+                    ts = ""
+                news.append(
+                    {
+                        "title": title,
+                        "summary": "",
+                        "source": "联合早报",
+                        "category": cat,
+                        "ctime": ts,
+                    }
+                )
+        except Exception as exc:
+            print(f"[zaobao] {url} 采集失败：{exc}")
     return news
 
 
@@ -291,6 +366,7 @@ def collect_all():
     collectors = [
         ("新浪新闻", collect_sina),
         ("百度热搜", collect_baidu_hot),
+        ("联合早报", collect_zaobao),
         ("天行数据", collect_tianapi),
         ("聚合数据", collect_juhe),
     ]

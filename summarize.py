@@ -10,6 +10,9 @@
 
 import re
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from datetime import datetime, timedelta
 
 import requests
 
@@ -21,6 +24,21 @@ from config import (
     RETRY_BASE_DELAY,
 )
 from filter import importance_score, normalize_title
+
+# 悬挂词：摘要若以这些词+句号结尾，说明是半句，应判定为截断
+HANGING_WORDS = [
+    "甚至", "但是", "然而", "因为", "所以", "如果", "尽管",
+    "虽然", "不过", "而且", "并且", "由于", "随着", "通过",
+    "根据", "对于", "关于", "为了", "除了", "经过",
+    "构", "打", "将", "对", "向", "为", "从", "把", "被",
+    "股", "元", "亿", "万", "人", "中", "上", "下", "前", "后",
+    "可", "能", "会", "要", "需", "得", "让", "使", "令",
+    "模", "式", "度", "法", "策", "施", "行", "动", "果",
+    "北", "南", "东", "西",
+    "有", "彼", "此", "其", "该", "各", "诸",
+    "出", "来", "去", "起", "到", "及", "与", "和", "或", "等",
+    "也", "还", "仍", "已", "将", "正", "在", "于", "之", "而",
+]
 
 SECTIONS = ["国际", "国内", "热点"]
 
@@ -62,18 +80,21 @@ TITLE_KEYWORDS = {
         "五角大楼", "国会", "参议院", "众议院", "首相", "总统", "总理",
         # 外国央行/国际经济政策
         "澳央行", "欧央行", "日本央行", "英国央行",
+        # 国际知名人物（不应归国内）
+        "比尔·盖茨", "盖茨", "马斯克", "巴菲特", "贝索斯", "扎克伯格",
+        "诺贝尔", "奥斯卡", "格莱美",
     ],
     "国内": [
         "中国", "北京", "上海", "深圳", "广州", "杭州", "成都", "武汉",
         "国务院", "发改委", "央行", "证监会", "银保监", "工信部",
         "全国人大", "政协", "两会", "政府工作报告",
         "A股", "港股", "沪深", "上证指数", "人民币",
-        "楼市", "房价", "房地产", "基建", "高铁", "地铁",
+        "楼市", "房价", "房地产", "住房", "贷款", "房贷", "基建", "高铁", "地铁",
         "社保", "医保", "养老金", "就业", "生育", "教育", "高考",
         "疫情", "卫健委", "疾控",
         "乡村振兴", "碳中和", "新能源", "光伏",
         "芯片", "半导体", "人工智能", "航天",
-        "华为", "小米", "比亚迪", "宁德时代", "腾讯", "阿里", "字节",
+        "华为", "小米", "比亚迪", "宁德时代", "腾讯", "阿里", "字节", "拼多多", "水滴",
         # 法规政策
         "法规", "条例", "新规", "政策", "办法", "意见",
     ],
@@ -87,6 +108,12 @@ TITLE_KEYWORDS = {
         "幼儿园", "学校", "医院", "医生", "护士", "患者",
         "违规", "违法", "查处", "整治", "整改", "暗访", "卧底",
         "公交车", "车祸", "撞", "翻车",
+        "教师", "合影", "耻辱", "争议", "引发",
+        # 社会民生
+        "月饼", "小蛇", "葡萄", "购物", "意外",
+        "法拍", "别墅", "毛坯", "贷款",
+        "一日游", "乡村", "孩子", "作业", "挑战赛",
+        "蛋糕店", "店主", "回应",
     ],
 }
 
@@ -108,14 +135,55 @@ def build_prompt(news_items, per_section=None, per_line=None):
     """构造 LLM 提示词，明确分类标准和排除规则。"""
     per_section = per_section or NEWS_PER_SECTION
     per_line = per_line or NEWS_PER_LINE
-    # 控制候选数量，避免小模型上下文过载（但不要太少，保证筛选空间）
-    news_items = news_items[:50]
+    # 控制候选数量，避免小模型上下文过载（但不要太少，保证筛选空间）。
+    # 注意：不能简单取前 N 条——采集顺序固定（新浪→百度→联合早报→天行→聚合），
+    # 直接截断会让候选被单一来源占满、国际/热点栏无米下锅，导致 LLM"格式不达标"。
+    # 改为按分类均衡采样：每类最多 20 条，保证三栏都有充足候选。
+    buckets = {"国际": [], "国内": [], "热点": []}
+    for n in news_items:
+        sec = (
+            _classify_by_title(n.get("title", ""))
+            or CATEGORY_MAP.get(n.get("category", ""))
+            or "热点"
+        )
+        buckets.setdefault(sec, []).append(n)
+    sampled = []
+    for sec in ("国际", "国内", "热点"):
+        sampled.extend(buckets[sec][:20])
+    if len(sampled) < 50:  # 不满再按原顺序从剩余补充
+        seen_ids = {id(n) for n in sampled}
+        for n in news_items:
+            if len(sampled) >= 50:
+                break
+            if id(n) not in seen_ids:
+                sampled.append(n)
+                seen_ids.add(id(n))
+    news_items = sampled
+    def _fmt_time(n):
+        t = n.get("time", "")
+        if t and isinstance(t, str):
+            return t[:10]  # 取 YYYY-MM-DD
+        ctime = n.get("ctime", "")
+        if ctime:
+            try:
+                from datetime import datetime
+                return datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        return ""
+
     candidate = "\n".join(
-        f"{i + 1}. 【{n['category']}】{n['title']}"
+        f"{i + 1}. 【{n['category']}】{_fmt_time(n)} {n['title']}"
         f"{'｜' + n['summary'][:80] if n.get('summary') else ''}"
         f"｜来源：{n['source']}"
         for i, n in enumerate(news_items)
     )
+    # 动态日期：提示词里的"今天"必须跟随真实运行日期，不能写死
+    _now = datetime.now()
+    today_cn = f"{_now.year}年{_now.month}月{_now.day}日"
+    today_iso = _now.strftime("%Y-%m-%d")
+    yesterday_iso = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
+    cutoff_iso = (_now - timedelta(days=3)).strftime("%Y-%m-%d")
     return f"""你是资深新闻编辑。以下是今日从权威渠道采集的候选新闻（含标题、简介、来源）。
 
 候选新闻：
@@ -125,83 +193,129 @@ def build_prompt(news_items, per_section=None, per_line=None):
 
 【分类标准】
 - 国际：外国政府决策、国际关系/外交、国际军事冲突、全球性重大事件、重大国际灾害事故。
-  不要选入：外国公司财报/销量/股价/IPO、外国科技公司产品发布、加密货币价格、商品期货价格。
+  国际栏必须包含至少1条重大国际政治/军事新闻（如大国领导人动态、战争冲突、重大外交事件、制裁/停火/谈判）。
+  国际栏严禁选入：外国公司IPO/财报/股价/销量、美联储/央行利率预测、债券市场分析、外国科技公司产品发布、加密货币、商品期货、文化交流活动。
 - 国内：中国中央及地方政府的政策法规、宏观经济数据、重大科技突破、重大民生政策、重大事故/灾难。
   不要选入：个股涨跌、期货早报、研报、游戏、明星八卦、单家公司业绩。
 - 热点：社会新闻（事故/案件/灾害/民生事件/消费者权益/食品安全）、全网热议的民生话题。
   热点优先选与民众生活相关的社会类新闻，娱乐明星绯闻/八卦不要选，体育赛事结果不要选。
 
 【时间要求】
-- 优先选择最近1-2天的新闻，排除明显的旧闻（如新闻中提到的日期是几个月前的）。
+- 今天是{today_cn}。候选新闻前面标注了日期（如"{today_iso}"）。
+- 优先选择标注日期为今天（{today_iso}）的新闻，其次是昨天（{yesterday_iso}）的。
+- 严格排除日期在3天以前的新闻（{cutoff_iso}及更早），即使内容重要也不选。
+- 如果标题里提到的具体事件日期是几个月前的（如"5月18日"、"6月26日"），这条是旧闻，必须排除。
 
 【写作要求】
-1. 排除：游戏新闻、娱乐八卦、个股/期货/ETF/研报、彩票博彩、加密货币价格、广告软文、标题党、纯商品价格快讯。
+1. 严格排除以下类型（即使标题很吸引眼球）：
+   - 娱乐明星绯闻/八卦（如明星恋情、回应传闻、个人隐私）
+   - 外国公司IPO/财报/股价/销量（如戴尔财报、希音IPO、丰田销量、苹果发布）
+   - 股东增减持等个股资本运作（如"XX获XX大手笔增持XX万股"）
+   - 个股/期货/ETF/研报、加密货币、彩票博彩
+   - 游戏新闻、文化交流/展览、纯商品价格快讯、广告软文
 2. 同一事件只保留一条，不跨分类重复；标题高度相似也算重复。
-3. 每条重写为 {per_line} 字以内的摘要：一句话核心事实+关键信息，不注水、不评论。
-4. 摘要必须是完整句子，信息完整，严禁用省略号"…"或"......"截断结尾。
+   同一热点主线只保留最重要的一条：例如同一场冲突的多条节点进展（打击、爆炸、断交、
+   伤亡等），最多选1条信息最全的，不要连续刷屏同一主题。
+   例如：西藏泥石流事件只能出现在一个分类中，不能同时出现在国内和热点。
+3. 每条摘要必须比标题多写出具体事实：主体、地点、数字、结果或表态，让读者只看摘要
+   就能了解发生了什么。
+   严禁把标题换个说法复述一遍——例如标题"美军称完成一波对伊朗军事目标打击"，
+   摘要若写"美军对伊朗军事目标进行打击"就是零信息量的灌水，应换一条能写清楚的新闻。
+   摘要字数：40至{per_line + 30}字左右（最短不低于15字，最长不超过120字），
+   信息完整、句子通顺即可，不必严格卡字数。
+4. 摘要必须是完整句子，严禁用省略号"…"或"......"截断结尾。
+   摘要必须以句号"、感叹号"！"或问号"？"结尾，不能以逗号、顿号或单个汉字结尾。
+   错误示例："日本防卫省甚至。"、"推动加快构建房地产发展新模。"、"比口岸高出1000米，可。"、"同比增长。"
+   正确示例："日本防卫省甚至考虑允许招募文身者以解决人员短缺问题。"
 5. 标题必须使用新闻的真实标题，不要自己编造标题。
-6. 必须简体中文，严格按下面格式输出，不要输出任何解释、思考、前后缀：
+6. 数量要求：【国际】【国内】【热点】三个分类每个至少输出2条，最多输出{per_section}条。不要只输出1条或0条。
+7. 必须简体中文，严格按下面格式输出，不要输出任何解释、思考、前后缀：
 
 【国际】
-1. **真实新闻标题**：{per_line}字以内的完整摘要
-2. **真实新闻标题**：{per_line}字以内的完整摘要
+1. **真实新闻标题**：{per_line}字左右的完整摘要
+2. **真实新闻标题**：{per_line}字左右的完整摘要
 
 【国内】
-1. **真实新闻标题**：{per_line}字以内的完整摘要
+1. **真实新闻标题**：{per_line}字左右的完整摘要
+2. **真实新闻标题**：{per_line}字左右的完整摘要
 
 【热点】
-1. **真实新闻标题**：{per_line}字以内的完整摘要"""
+1. **真实新闻标题**：{per_line}字左右的完整摘要
+2. **真实新闻标题**：{per_line}字左右的完整摘要"""
+
+
+def _do_request(provider, prompt):
+    """执行单次 LLM 请求（内部函数，用于线程池超时控制）。"""
+    payload = {
+        "model": provider["model"],
+        "messages": [
+            {"role": "system", "content": "你是资深新闻编辑，输出简洁、客观、有信息量。必须严格按照用户要求的格式输出，不要输出任何思考过程或解释。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        # 输出 15 条(标题+摘要)约 1200-1800 tokens，2500 足够；
+        # 再大容易触发部分免费模型的 max_tokens 上限校验（400 Bad Request）
+        "max_tokens": 2500,
+    }
+    if provider.get("extra_body"):
+        payload.update(provider["extra_body"])
+
+    headers = {
+        "Authorization": f"Bearer {provider['api_key']}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/",
+        "X-Title": "Daily News",
+    }
+    url = provider["base_url"].rstrip("/") + "/chat/completions"
+    # 连接3秒，读取按provider配置；禁用urllib3重试，避免TCP异常时无限挂死
+    timeout = provider.get("timeout", 60)
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(max_retries=0)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    resp = session.post(url, json=payload, headers=headers, timeout=(3, timeout))
+    resp.raise_for_status()
+    data = resp.json()
+    msg = data["choices"][0]["message"]
+    text = msg.get("content") or ""
+    if not text.strip() and msg.get("reasoning_content"):
+        text = msg["reasoning_content"]
+    if isinstance(text, list):
+        text = "".join(str(x) for x in text)
+    # 过滤 <think> 思考过程
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
+    if not text.strip():
+        raise RuntimeError("返回空内容")
+    return text
 
 
 def _call_provider_with_retry(provider, prompt, max_retries=None):
-    """调用 LLM provider，支持 429 限流的指数退避重试。
+    """调用 LLM provider，支持 429 限流的指数退避重试，并用线程池做硬超时保护。
 
     Returns: (text, error_message) 成功时 text 为响应内容，失败时 text 为 None。
     """
     if max_retries is None:
         max_retries = provider.get("max_retries", 1)
-    timeout = provider.get("timeout", 60)
+    hard_timeout = provider.get("timeout", 60) + 5  # 硬超时 = 读取超时 + 5秒缓冲
     last_error = None
 
     for attempt in range(max_retries + 1):
+        executor = ThreadPoolExecutor(max_workers=1)
         try:
-            payload = {
-                "model": provider["model"],
-                "messages": [
-                    {"role": "system", "content": "你是资深新闻编辑，输出简洁、客观、有信息量。必须严格按照用户要求的格式输出，不要输出任何思考过程或解释。"},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.3,  # 降低温度，减少格式混乱
-                "max_tokens": 4000,
-            }
-            if provider.get("extra_body"):
-                payload.update(provider["extra_body"])
-
-            headers = {
-                "Authorization": f"Bearer {provider['api_key']}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/",
-                "X-Title": "Daily News",
-            }
-            url = provider["base_url"].rstrip("/") + "/chat/completions"
-            resp = requests.post(url, json=payload, headers=headers, timeout=(5, timeout))
-            resp.raise_for_status()
-            data = resp.json()
-            msg = data["choices"][0]["message"]
-            text = msg.get("content") or ""
-            # 兼容推理模型的 reasoning_content
-            if not text.strip() and msg.get("reasoning_content"):
-                text = msg["reasoning_content"]
-            # 兼容数组格式 content
-            if isinstance(text, list):
-                text = "".join(str(x) for x in text)
-            # 过滤 <think>...</think> 思考过程
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            # 过滤 <think> 未闭合的情况
-            text = re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
-            if not text.strip():
-                raise RuntimeError("返回空内容")
+            future = executor.submit(_do_request, provider, prompt)
+            text = future.result(timeout=hard_timeout)
+            executor.shutdown(wait=False)
             return text, None
+        except TimeoutError:
+            last_error = f"硬超时({hard_timeout}s)"
+            print(f"[summarize] {provider['model']} 请求超时({hard_timeout}s)")
+            executor.shutdown(wait=False)
+            # 免费服务偶发变慢，超时后重试一次（不是致命失败）
+            if attempt < max_retries:
+                time.sleep(RETRY_BASE_DELAY)
+                continue
+            return None, last_error
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response is not None else 0
             last_error = f"{status_code} {e.response.reason if e.response is not None else ''}"
@@ -211,7 +325,6 @@ def _call_provider_with_retry(provider, prompt, max_retries=None):
                 time.sleep(delay)
                 continue
             if status_code == 402:
-                # 欠费，直接放弃这个provider，不重试
                 return None, f"{status_code} Payment Required（欠费）"
             if status_code >= 500 and attempt < max_retries:
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
@@ -231,10 +344,8 @@ def _call_provider_with_retry(provider, prompt, max_retries=None):
 
 
 def _is_format_ok(sections, per_section=None):
-    """三个分类都至少有 min(per_section, 3) 条才算格式达标。"""
-    per_section = per_section or NEWS_PER_SECTION
-    min_count = min(per_section, 3)
-    return all(len(sections.get(s, [])) >= min_count for s in SECTIONS)
+    """三个分类都至少有1条就算格式达标（不足部分由 _fill_missing_sections 补充）。"""
+    return all(len(sections.get(s, [])) >= 1 for s in SECTIONS)
 
 
 def _is_chinese_ok(sections):
@@ -251,21 +362,20 @@ def _is_chinese_ok(sections):
 
 
 def _is_summary_complete(sections, per_line=None):
-    """校验摘要是否完整：不能以省略号结尾，不能太短（少于10字），不能有截断痕迹。"""
+    """校验摘要是否完整：不能以省略号结尾，不能太短，字数在合理范围内。"""
     per_line = per_line or NEWS_PER_LINE
+    min_len = 15           # 最低字数（大幅降低，确保智谱稳定通过）
+    max_len = 150          # 最高字数（再放宽）
     for sec, items in sections.items():
         for title, summary in items:
             s = summary.strip()
-            if len(s) < 8:
+            if len(s) < min_len:
+                print(f"[校验] 摘要太短：{len(s)}字 < {min_len}字，标题：{title[:20]}...")
+                return False
+            if len(s) > max_len:
+                print(f"[校验] 摘要太长：{len(s)}字 > {max_len}字，标题：{title[:20]}...")
                 return False
             if s.endswith("…") or s.endswith("...") or s.endswith("......"):
-                return False
-            # 检查是否以标点符号结尾（完整句子的标志）
-            if not re.search(r"[。！？；：，、）】」』]$", s):
-                # 不以标点结尾可能是截断，但也可能是短新闻，放宽检查
-                pass
-            # 检查是否有明显的截断痕迹
-            if re.search(r"[，、；：]$", s) and len(s) > per_line - 5:
                 return False
     return True
 
@@ -340,20 +450,35 @@ def _deduplicate_sections(sections):
 def _fill_missing_sections(sections, news_items, per_section=None):
     """当 LLM 返回的某些分类条数不足时，用规则筛选补充缺失的部分。"""
     per_section = per_section or NEWS_PER_SECTION
-    # 已选用的标题
+    # 已选用的标题（精确去重 + 同事件/同主线去重）
     used_titles = set()
+    used_pairs = []  # [(norm_title, summary)]
     for items in sections.values():
-        for title, _ in items:
+        for title, summary in items:
             used_titles.add(normalize_title(title))
+            used_pairs.append((normalize_title(title), summary or title))
 
-    # 按分类从候选池中选取未被使用的、高重要性的新闻
+    # 按分类从候选池中选取未被使用的、高重要性的新闻（同时过滤禁止内容）
     grouped = {"国际": [], "国内": [], "热点": []}
     for n in news_items:
         if normalize_title(n["title"]) in used_titles:
             continue
+        # 过滤禁止关键词（和LLM输出用同一标准）
+        text = n.get("title", "") + " " + n.get("summary", "")
+        matched_ban = None
+        for ban in _POST_FILTER_BAN:
+            if ban in text:
+                matched_ban = ban
+                break
+        if matched_ban:
+            print(f"[补充过滤] {matched_ban}：{n['title'][:30]}...")
+            continue
         sec = CATEGORY_MAP.get(n.get("category", ""))
-        if not sec:
-            sec = _classify_by_title(n["title"])
+        # 用标题关键词验证/修正分类（避免采集源分类错误）
+        title_sec = _classify_by_title(n["title"])
+        if title_sec and title_sec != sec:
+            # 标题关键词强烈暗示另一分类，优先采用标题判断
+            sec = title_sec
         if not sec:
             sec = "热点"
         if sec in grouped:
@@ -363,28 +488,231 @@ def _fill_missing_sections(sections, news_items, per_section=None):
     for sec in grouped:
         grouped[sec].sort(key=importance_score, reverse=True)
 
-    # 补充缺失分类或不足条数
+    # 补充缺失分类或不足条数（同分类优先，不足时从其他分类补充）
     for sec in SECTIONS:
         current = sections.get(sec, [])
         needed = per_section - len(current)
         if needed > 0:
-            candidates = grouped.get(sec, [])
-            added = 0
-            for n in candidates:
-                if added >= needed:
+            # 先尝试同分类
+            for n in grouped.get(sec, []):
+                if needed <= 0:
                     break
-                summary = n.get("summary") or n["title"]
+                norm = normalize_title(n["title"])
+                if norm in used_titles:
+                    continue
+                # 与已选内容同事件/同主线的不再补充（避免同主题刷屏）
+                if any(
+                    _is_same_event(norm, n.get("summary") or n["title"], u_t, u_s)
+                    for u_t, u_s in used_pairs
+                ):
+                    print(f"[补充跳过] 与已选同主线：{n['title'][:30]}...")
+                    continue
+                # 有实质简介优先；无简介但标题信息完整(>=9字)的以标题直接成行
+                # （联合早报等源无简介，重大国际/热点新闻不能因此漏掉）
+                summary = _rich_summary(n)
+                if summary is None:
+                    if len(norm) >= 9:
+                        summary = n["title"]
+                    else:
+                        print(f"[补充跳过] 无简介且标题过短：{n['title'][:30]}...")
+                        continue
                 if len(summary) > NEWS_PER_LINE:
-                    summary = summary[:NEWS_PER_LINE].rstrip("，。；：、！？,.!:;")
+                    # 优先在最近的中文句号/感叹号/问号处截断
+                    cut = max(
+                        summary[:NEWS_PER_LINE].rfind("。"),
+                        summary[:NEWS_PER_LINE].rfind("！"),
+                        summary[:NEWS_PER_LINE].rfind("？"),
+                    )
+                    if cut > 0:
+                        summary = summary[:cut + 1]
+                    else:
+                        # 找不到句子边界，用标题兜底但保证语义完整
+                        summary = n["title"] + "。"
                 current.append((n["title"], summary))
-                used_titles.add(normalize_title(n["title"]))
-                added += 1
+                used_pairs.append((norm, summary))
+                used_titles.add(norm)
+                needed -= 1
+            # 同分类不够，从其他分类补充（热点不从国际补充）
+            if needed > 0:
+                for other_sec in SECTIONS:
+                    if other_sec == sec:
+                        continue
+                    if sec == "热点" and other_sec == "国际":
+                        continue
+                    for n in grouped.get(other_sec, []):
+                        if needed <= 0:
+                            break
+                        norm = normalize_title(n["title"])
+                        if norm in used_titles:
+                            continue
+                        if any(
+                            _is_same_event(norm, n.get("summary") or n["title"], u_t, u_s)
+                            for u_t, u_s in used_pairs
+                        ):
+                            print(f"[补充跳过] 与已选同主线：{n['title'][:30]}...")
+                            continue
+                        summary = _rich_summary(n)
+                        if summary is None:
+                            if len(norm) >= 9:
+                                summary = n["title"]
+                            else:
+                                print(f"[补充跳过] 无简介且标题过短：{n['title'][:30]}...")
+                                continue
+                        if len(summary) > NEWS_PER_LINE:
+                            # 优先在最近的中文句号/感叹号/问号处截断
+                            cut = max(
+                                summary[:NEWS_PER_LINE].rfind("。"),
+                                summary[:NEWS_PER_LINE].rfind("！"),
+                                summary[:NEWS_PER_LINE].rfind("？"),
+                            )
+                            if cut > 0:
+                                summary = summary[:cut + 1]
+                            else:
+                                # 找不到句子边界，用标题兜底但保证语义完整
+                                summary = n["title"] + "。"
+                        current.append((n["title"], summary))
+                        used_pairs.append((norm, summary))
+                        used_titles.add(norm)
+                        needed -= 1
             sections[sec] = current
     return sections
 
 
+def _reclassify_sections(sections):
+    """根据标题关键词重新分类，修正LLM的分类错误。"""
+    reclassified = {"国际": [], "国内": [], "热点": []}
+    for sec, items in sections.items():
+        for title, summary in items:
+            new_sec = _classify_by_title(title)
+            if not new_sec:
+                new_sec = sec  # 如果无法判断，保持原分类
+            reclassified[new_sec].append((title, summary))
+    return reclassified
+
+
+# 后处理：过滤LLM输出的明显问题（禁止内容、截断摘要等）
+_POST_FILTER_BAN = [
+    # 娱乐八卦
+    "明星", "绯闻", "恋情", "分手", "出轨", "八卦", "网红", "综艺",
+    "塌房", "官宣", "爆料", "婚变", "情变", "小三", "整容", "离婚",
+    "孙宇晨", "景甜",
+    # 外国公司IPO/财报/股价/销量（国际栏不应出现）
+    "IPO", "上市", "财报", "营收", "净利润", "股价", "市值", "销量",
+    "希音", "Shein", "丰田", "苹果发布", "特斯拉",
+    # 车企/市场分析（不应作为国际政治新闻）
+    "美国车企", "坚守中国市场", "汽车品牌", "美银证券",
+    # 投资机构/债券分析（不应作为要闻）
+    "品浩", "PIMCO", "债券收益率", "债市", "债券投资者", "消化不良", "沃什", "杰克逊霍尔",
+    # 企业财报/业绩（不应作为要闻）
+    "华泰证券", "齐鲁银行", "青农商行", "中期业绩", "净利润增长",
+    "锦江酒店", "迈瑞医疗", "扣非净利", "归母净利润", "半年度报告",
+    # 股市/券商/基金（不应作为要闻）
+    "A股", "冲高回落", "大同证券", "华宝基金", "3A日报", "早盘", "领涨", "收绿",
+    "涨停", "涨超", "跌超", "大涨", "大跌", "飙升", "暴跌",
+    "板块", "逆市", "拉升", "农化", "粮食", "粮食需求",
+    # 企业软广/公关
+    "联想", "海尔", "小米发布", "华为发布", "北森", "北森CEO", "拼多多", "美团",
+    "瑞为技术", "董事长", "签署战略合作协议",
+    # 企业财报/业绩（补充）
+    "理想汽车", "亏掉", "半年报", "收入", "同比下降",
+    "董明珠", "格力电器", "家电龙头",
+    # 财经基金
+    "基金", "基民", "盈亏", "投资者占比", "中期报告",
+    # 股市/投资（补充）
+    "科创", "指数", "收益", "跑赢", "跑输",
+]
+
+
+def _post_filter_sections(sections):
+    """后处理过滤：去除包含禁止关键词的新闻，去除明显截断的摘要。"""
+    filtered = {}
+    for sec, items in sections.items():
+        kept = []
+        for title, summary in items:
+            text = title + summary
+            # 过滤禁止关键词
+            if any(ban in text for ban in _POST_FILTER_BAN):
+                print(f"[后处理] 过滤禁止内容：{title[:30]}...")
+                continue
+            # 过滤明显截断的摘要（少于15字或以悬挂词结尾）
+            s = summary.strip()
+            if len(s) < 15:
+                print(f"[后处理] 过滤截断摘要（{len(s)}字）：{title[:30]}...")
+                continue
+            # 以悬挂词结尾（句子未说完）
+            if any(s.endswith(h) for h in HANGING_WORDS):
+                print(f"[后处理] 过滤悬挂结尾：{title[:30]}...")
+                continue
+            # 以句号结尾但前面是悬挂词（如"甚至。"、"构。"）
+            if s.endswith("。"):
+                prefix = s[:-1]
+                if any(prefix.endswith(h) for h in HANGING_WORDS):
+                    print(f"[后处理] 过滤悬挂+句号：{title[:30]}... (结尾: ...{prefix[-5:]})")
+                    continue
+            # 摘要只是把标题换个说法复述（无信息增量）
+            if _is_title_repeat(title, s):
+                print(f"[后处理] 过滤标题复述摘要：{title[:30]}...")
+                continue
+            kept.append((title, summary))
+        filtered[sec] = kept
+    return filtered
+
+
+def _is_title_repeat(title, summary):
+    """判断摘要是否只是标题的同义复述（无信息增量，应视为灌水）。
+
+    判定依据（归一化后）：
+    - 两文本相等或互相包含 → 复述
+    - 篇幅相近（差异在可接受范围内）且摘要的字符大多能在标题字符池中
+      复用（复用率 >= 80%）→ 复述。无论重排、删词还是换少量说法，
+      只要没有实质新词，都算"标题换了个说法"。
+    - 摘要明显比标题长（补了大量新内容）→ 放行，不算复述
+    """
+    t = normalize_title(title)
+    s = normalize_title(summary)
+    if len(t) < 6 or len(s) < 6:
+        return False  # 太短无法可靠判断
+    if s == t or s.startswith(t) or t.startswith(s):
+        return True
+    shorter_n = min(len(t), len(s))
+    longer_n = max(len(t), len(s))
+    # 篇幅差异过大说明补了新信息（或只截了一段），不判复述
+    if longer_n - shorter_n > max(6, int(shorter_n * 0.6)):
+        return False
+    ct = Counter(t)
+    reused = sum(min(cnt, ct.get(ch, 0)) for ch, cnt in Counter(s).items())
+    return reused >= len(s) * 0.75
+
+
+def _rich_summary(n, per_line=None):
+    """从候选条目提取可作摘要的实质简介；无可用内容返回 None。
+
+    不可用的情形：简介为空、过短(<15字)、或只是标题的同义复述。
+    返回 None 的条目不应强行选入（宁缺毋滥，避免"标题复述"式灌水摘要）。
+    """
+    per_line = per_line or NEWS_PER_LINE
+    raw = (n.get("summary") or "").strip()
+    if not raw:
+        return None
+    raw = raw.replace("**", "").replace("*", "").strip()
+    if len(raw) < 15:
+        return None
+    if _is_title_repeat(n.get("title", ""), raw):
+        return None
+    # 源简介被平台硬截断成半句（较长却没有句末标点）→ 不可用，改用标题成行
+    if len(raw) >= 35 and not re.search(r"[。！？]$", raw):
+        return None
+    return raw
+
+
 def sections_to_markdown(sections, per_line=None):
-    """根据去重后的 sections 重新生成规范 markdown。"""
+    """根据去重后的 sections 重新生成规范 markdown。
+
+    摘要规则：
+    - 摘要有实质内容 → "**标题**：摘要"
+    - 摘要为空或只是标题复述（无简介的新闻源以标题成行）→ 只输出加粗标题，
+      避免"标题：标题"的重复观感
+    """
     per_line = per_line or NEWS_PER_LINE
     lines = []
     for sec in SECTIONS:
@@ -393,41 +721,38 @@ def sections_to_markdown(sections, per_line=None):
             continue
         lines.append(f"【{sec}】")
         lines.append("")
-        for i, (title, summary) in enumerate(items, 1):
+        idx = 0
+        for title, summary in items:
             # 清理摘要
             s = summary.strip()
-            # 去掉残留的markdown标记
             s = s.replace("**", "").replace("*", "").strip()
             # 去掉尾部省略号（中英文省略号、连续句号等变体）
             s = re.sub(r"[…。.]{2,}\s*$", "", s).rstrip("…。.")
             # 修复明显截断：以逗号、顿号结尾的，去掉末尾标点
             while s and s[-1] in "，、；：":
                 s = s[:-1].rstrip()
+            # 无实质摘要，或摘要只是标题复述 → 以标题直接成行（不重复显示摘要）
+            if not s or _is_title_repeat(title, s):
+                idx += 1
+                lines.append(f"{idx}. **{title}**")
+                lines.append("")
+                continue
             # 如果摘要没有句末标点，补一个句号
-            if s and not re.search(r"[。！？]$", s):
+            if not re.search(r"[。！？]$", s):
                 s += "。"
-            # 如果摘要超过字数限制，智能截断（只在句末标点处断句，绝不以逗号收尾）
-            if len(s) > per_line:
-                truncated = s[:per_line]
-                for punct in ["。", "！", "？"]:
-                    pos = truncated.rfind(punct)
-                    if pos >= per_line * 0.6:
-                        truncated = truncated[:pos + 1]
-                        break
-                else:
-                    truncated = truncated.rstrip("，。；：、！？,.!:;")
-                    if truncated and not re.search(r"[。！？]$", truncated):
-                        truncated += "。"
-                s = truncated
-            # 最终保险：任何情况下不以悬挂标点（逗号等）收尾
-            while s and s[-1] in "，、；：":
-                s = s[:-1].rstrip()
-            if s and not re.search(r"[。！？]$", s):
-                s += "。"
+            # 如果摘要太短（不足20字），尝试用标题补充关键信息
+            if len(s) < 20:
+                if title not in s:
+                    combined = title + "：" + s
+                    if len(combined) <= 120:
+                        s = combined
+                    else:
+                        s = title + "。"
             # 如果摘要太短（不足10字），可能被截断，用标题兜底
             if len(s) < 10:
                 s = title + "。"
-            lines.append(f"{i}. **{title}**：{s}")
+            idx += 1
+            lines.append(f"{idx}. **{title}**：{s}")
             lines.append("")
     return "\n".join(lines).strip()
 
@@ -484,7 +809,7 @@ def _longest_common_substring_len(s1, s2):
     return best
 
 
-def _is_similar_title(norm1, norm2, threshold=0.6):
+def _is_similar_title(norm1, norm2, threshold=0.5):
     """判断两个归一化标题是否相似（同一事件的不同报道）。
 
     判定规则：
@@ -519,6 +844,44 @@ def _clean_for_compare(s):
     return _BOILERPLATE_RE.sub("", s or "").strip()
 
 
+# 同一热点主线收敛用：主要国家/地区 + 动作域
+# 用于避免同一主题连续刷屏（如美伊冲突的"打击""爆炸"两条节点只保留一条）
+_MAINLINE_REGIONS = [
+    "美国", "中国", "俄罗斯", "乌克兰", "日本", "韩国", "朝鲜", "印度",
+    "伊朗", "以色列", "巴勒斯坦", "黎巴嫩", "叙利亚", "伊拉克", "阿富汗",
+    "也门", "巴基斯坦", "土耳其", "沙特", "埃及", "利比亚", "缅甸",
+    "英国", "法国", "德国", "秘鲁", "阿根廷", "巴西", "墨西哥",
+    "加拿大", "澳大利亚", "欧盟", "北约", "联合国", "加沙", "吉隆",
+    "西藏", "云南", "四川", "河南",
+]
+_MAINLINE_DOMAINS = {
+    "军事": ["打击", "空袭", "轰炸", "爆炸", "袭击", "遇袭", "遭袭", "突袭",
+             "夜袭", "炮轰", "狂轰", "再轰", "导弹", "炮击", "开火", "交火",
+             "反击", "击落", "撤军", "军事目标", "冲突", "战争"],
+    "外交": ["断交", "绝交", "声明", "宣布", "谴责", "抗议", "会谈", "谈判",
+             "会晤", "访问", "禁运", "制裁"],
+    "灾害": ["地震", "台风", "洪水", "泥石流", "火灾", "事故", "死伤", "伤亡",
+             "遇难", "丧生", "身亡", "受伤", "搜救", "救援", "抢通", "塌方",
+             "失联", "被困", "冲毁"],
+}
+
+
+def _same_mainline(t1, t2):
+    """判断两条新闻是否属于同一热点主线（同一地区 + 同一动作域）。
+
+    用于收敛同一事件的多个报道节点（如"美军打击伊朗"+"伊朗多地爆炸"），
+    避免早报同一主题连续刷屏；不同动作域（军事 vs 外交）则各自保留。
+    """
+    regions1 = {r for r in _MAINLINE_REGIONS if r in t1}
+    regions2 = {r for r in _MAINLINE_REGIONS if r in t2}
+    if not (regions1 & regions2):
+        return False
+    for domain_words in _MAINLINE_DOMAINS.values():
+        if any(w in t1 for w in domain_words) and any(w in t2 for w in domain_words):
+            return True
+    return False
+
+
 def _is_same_event(t1, s1, t2, s2):
     """判断两条新闻是否为同一事件（标题或摘要任一相似即算）。
 
@@ -527,7 +890,10 @@ def _is_same_event(t1, s1, t2, s2):
     2. 同事件指纹：共享数字（伤亡人数/年份等）+ >=4 字核心短语
        （标题或摘要，去数字后比较）。如"冷藏车"事故多篇报道都含"8"
        且摘要共享"河南平顶山"。无数字的套话（"相关部门已回应"）不会误判。
+    3. 同一热点主线（_same_mainline：同一地区 + 同一动作域）→ 收敛为一条
     """
+    if _same_mainline(t1, t2):
+        return True
     if _is_similar_title(t1, t2):
         return True
     s1c, s2c = _clean_for_compare(s1), _clean_for_compare(s2)
@@ -537,12 +903,37 @@ def _is_same_event(t1, s1, t2, s2):
         ls = _longest_common_substring_len(re.sub(r"\d+", "", s1c), re.sub(r"\d+", "", s2c))
         if max(lt, ls) >= 4:
             return True
+    # 特殊规则：共享地名+事件关键词（如"西藏泥石流"），即使没有共享数字也视为同一事件
+    location_events = ["西藏泥石流", "吉隆泥石流", "西藏吉隆", "房地产信贷", "住房贷款", " Jackson Hole"]
+    for le in location_events:
+        if le in t1 + s1c and le in t2 + s2c:
+            return True
+    # 更通用：共享同一灾害类型+同一地区（如"泥石流"+"西藏"/"吉隆"）
+    disasters = ["泥石流", "地震", "台风", "洪水", "雪崩", "堰塞湖"]
+    for d in disasters:
+        if d in t1 + s1c and d in t2 + s2c:
+            # 同时共享地区关键词
+            regions = ["西藏", "吉隆", "四川", "内江", "隆昌", "上海", "广东", "长沙", "重庆"]
+            for r in regions:
+                if r in t1 + s1c and r in t2 + s2c:
+                    return True
     return False
 
 
 def _one_line_summary(n, per_line):
-    """规则兜底生成完整一句话新闻：完整性优先，字数上限放宽到 1.6 倍。"""
-    s = _clean_for_compare(n.get("summary") or "")
+    """规则兜底生成完整一句话新闻：完整性优先，字数目标 per_line 左右（30-100字）。
+
+    若该条没有可用简介（空/过短/标题复述/源截断半句），返回 None，
+    由调用方以标题直接成行（宁缺毋滥，绝不输出半句话）。
+    """
+    rich = _rich_summary(n, per_line)
+    if rich is None:
+        return None
+    # 源数据常把简介硬截断成半句（如"…锁定在显示器分"、"…射击与MOBA"），
+    # 原文没有句末标点，清理后补句号也读不通，直接判为不可用（改用标题成行）
+    if len(rich) >= 35 and not re.search(r"[。！？]$", rich):
+        return None
+    s = _clean_for_compare(rich)
     s = s.replace("**", "").replace("*", "").strip()
     # 去掉尾部省略号/连续句号
     s = re.sub(r"[…。.]{2,}\s*$", "", s).rstrip("…。.")
@@ -550,16 +941,22 @@ def _one_line_summary(n, per_line):
     while s and s[-1] in "，、；：":
         s = s[:-1].rstrip()
     if not s:
-        s = n["title"]
+        return None
     if s and not re.search(r"[。！？]$", s):
         s += "。"
-    # 超长时在标点处断句（放宽上限，保证句子完整）
-    limit = int(per_line * 1.6)
-    if len(s) > limit:
-        truncated = s[:limit]
+    # 字数控制：最低20字，最高120字
+    min_limit = 20
+    max_limit = 120
+    if len(s) < min_limit:
+        # 太短时尝试用标题补充
+        extra = n["title"]
+        if extra not in s:
+            s = extra + "：" + s
+    if len(s) > max_limit:
+        truncated = s[:max_limit]
         for punct in ["。", "！", "？", "；", "，"]:
             pos = truncated.rfind(punct)
-            if pos >= limit * 0.5:
+            if pos >= max_limit * 0.5:
                 truncated = truncated[:pos + 1]
                 break
         else:
@@ -581,13 +978,21 @@ def rule_summary(news_items, per_section=None, per_line=None):
     per_line = per_line or NEWS_PER_LINE
     total = per_section + FALLBACK_EXTRA_PER_SECTION
 
-    grouped = {"国际": [], "国内": [], "热点": []}
+    # 规则筛选也用 _POST_FILTER_BAN 过滤禁止内容
+    filtered_news = []
     for n in news_items:
-        # 先用采集源自带的分类映射
-        sec = CATEGORY_MAP.get(n.get("category", ""))
-        # 如果源分类缺失或不明确，用标题关键词推断
+        text = n.get("title", "") + " " + n.get("summary", "")
+        if any(ban in text for ban in _POST_FILTER_BAN):
+            continue
+        filtered_news.append(n)
+
+    grouped = {"国际": [], "国内": [], "热点": []}
+    for n in filtered_news:
+        # 优先用标题关键词推断分类（覆盖采集源的错误分类）
+        sec = _classify_by_title(n["title"])
+        # 如果标题关键词无法判断，再用采集源分类
         if not sec:
-            sec = _classify_by_title(n["title"])
+            sec = CATEGORY_MAP.get(n.get("category", ""))
         # 社会新闻强制归热点
         if n.get("category") == "社会":
             sec = "热点"
@@ -596,9 +1001,12 @@ def rule_summary(news_items, per_section=None, per_line=None):
             sec = "热点"
         grouped[sec].append(n)
 
-    # 每组按重要性分数降序排列
+    # 每组按重要性分数降序排列；有实质简介的优先，无简介的排最后（宁缺毋滥）
     for sec in grouped:
-        grouped[sec].sort(key=importance_score, reverse=True)
+        grouped[sec].sort(
+            key=lambda n: importance_score(n) + (60 if _rich_summary(n) else -60),
+            reverse=True,
+        )
 
     # 跨组去重（同一新闻/同一事件可能因分类模糊被放入多组）
     used = []  # [(norm_title, summary)]
@@ -613,6 +1021,8 @@ def rule_summary(news_items, per_section=None, per_line=None):
         return False
 
     # 按优先级选：国内→国际→热点
+    # 富简介优先；无简介条目只在富条不足每栏目标数时兜底（避免复述标题灌水）
+    rich_counts = {"国际": 0, "国内": 0, "热点": 0}
     for sec in ["国内", "国际", "热点"]:
         for n in grouped[sec]:
             if len(result[sec]) >= total:
@@ -620,25 +1030,36 @@ def rule_summary(news_items, per_section=None, per_line=None):
             norm = normalize_title(n["title"])
             if _is_duplicate(n):
                 continue
+            if _rich_summary(n) is None and rich_counts[sec] >= per_section:
+                continue
             used.append((norm, n.get("summary") or ""))
             result[sec].append(n)
+            if _rich_summary(n) is not None:
+                rich_counts[sec] += 1
 
     # 如果某组不足，从其他组的溢出新闻中按分数补充
+    # 热点栏禁止从国际组补充（避免国际政治/灾难新闻混入热点）
     for sec in SECTIONS:
         if len(result[sec]) < total:
             for other_sec in SECTIONS:
                 if other_sec == sec:
                     continue
+                if sec == "热点" and other_sec == "国际":
+                    continue  # 国际新闻不补到热点栏
                 for n in grouped[other_sec]:
                     if len(result[sec]) >= total:
                         break
                     norm = normalize_title(n["title"])
                     if _is_duplicate(n):
                         continue
+                    if _rich_summary(n) is None and rich_counts[sec] >= per_section:
+                        continue
                     result[sec].append(n)
+                    if _rich_summary(n) is not None:
+                        rich_counts[sec] += 1
                     used.append((norm, n.get("summary") or ""))
 
-    # 生成 markdown（一句话新闻，完整性优先）
+    # 生成 markdown（富简介优先；仅在富条不足时用标题兜底，避免空栏）
     lines = []
     for sec in SECTIONS:
         items = result[sec]
@@ -646,8 +1067,15 @@ def rule_summary(news_items, per_section=None, per_line=None):
             continue
         lines.append(f"【{sec}】")
         lines.append("")
-        for i, n in enumerate(items[:total], 1):
-            lines.append(f"{i}. **{n['title']}**：{_one_line_summary(n, per_line)}")
+        idx = 0
+        for n in items[:total]:
+            s = _one_line_summary(n, per_line)
+            idx += 1
+            if s is None:
+                # 无实质简介：标题本身直接成行，避免"标题：标题"重复
+                lines.append(f"{idx}. **{n['title']}**")
+            else:
+                lines.append(f"{idx}. **{n['title']}**：{s}")
             lines.append("")
     return "\n".join(lines).strip()
 
@@ -667,7 +1095,17 @@ def summarize(news_items):
 
     prompt = build_prompt(news_items)
     # 格式不达标时的修复提示
-    fix_prompt = prompt + "\n\n【重要提醒】你上次输出格式不正确或内容不完整，请严格按上面的格式重新输出，确保【国际】【国内】【热点】三个分类都有5条新闻，每条格式为「数字. **标题**：摘要」，摘要必须完整句子，不要用省略号结尾。"
+    fix_prompt = prompt + (
+        f"\n\n【重要提醒】你上次输出格式不正确或内容不完整，请严格按上面的格式重新输出，"
+        f"确保【国际】【国内】【热点】三个分类每个至少2条、最多{NEWS_PER_SECTION}条新闻，"
+        f"每条格式为「数字. **标题**：摘要」，摘要必须完整句子、15-120字均可，"
+        f"不要用省略号结尾。每条摘要必须写出标题之外的具体事实（谁/何时/何地/结果或数字），"
+        f"严禁把标题换个说法复述一遍；某条写不出实质内容就换另一条候选。"
+        f"国际栏必须包含至少1条重大国际政治/军事新闻。"
+    )
+
+    best_partial = None   # 校验未完全通过时，条数最多的部分结果（可补充后采用）
+    best_count = 0
 
     for provider in LLM_PROVIDERS:
         if not provider.get("api_key"):
@@ -686,6 +1124,10 @@ def summarize(news_items):
             text = text[text.find("【国际】"):]
         sections = parse_markdown(text)
         sections = _deduplicate_sections(sections)
+        total = sum(len(v) for v in sections.values())
+        if total > best_count:
+            best_count = total
+            best_partial = sections
 
         format_ok = _is_format_ok(sections)
         chinese_ok = _is_chinese_ok(sections)
@@ -700,6 +1142,10 @@ def summarize(news_items):
                 text2 = text2[text2.find("【国际】"):]
                 sections2 = parse_markdown(text2)
                 sections2 = _deduplicate_sections(sections2)
+                total2 = sum(len(v) for v in sections2.values())
+                if total2 > best_count:
+                    best_count = total2
+                    best_partial = sections2
                 if (_is_format_ok(sections2) and _is_chinese_ok(sections2)
                         and _is_summary_complete(sections2)):
                     sections = sections2
@@ -710,7 +1156,14 @@ def summarize(news_items):
 
         if format_ok and chinese_ok and complete_ok and titles_ok:
             # 补充可能的缺失条目（如果某类不足）
+            # 后处理过滤禁止内容和截断摘要
+            sections = _post_filter_sections(sections)
+            # 重新分类（修正LLM的分类错误）
+            sections = _reclassify_sections(sections)
+            # 补充缺失分类
             sections = _fill_missing_sections(sections, news_items)
+            # 补充后可能引入重复，再去重一次
+            sections = _deduplicate_sections(sections)
             print(
                 f"[summarize] 已采用 {provider['base_url']} "
                 f"{provider['model']} 的提炼结果"
@@ -719,7 +1172,9 @@ def summarize(news_items):
         else:
             reasons = []
             if not format_ok:
-                reasons.append("格式不达标")
+                # 打印各分类条数，方便调试
+                counts = {s: len(sections.get(s, [])) for s in SECTIONS}
+                reasons.append(f"格式不达标(条数{counts})")
             if not chinese_ok:
                 reasons.append("非中文")
             if not complete_ok:
@@ -730,6 +1185,25 @@ def summarize(news_items):
                 f"[summarize] {provider['model']} {','.join(reasons)}，"
                 "尝试下一个 provider"
             )
+
+    # 所有 provider 都没完全达标：若有可用的部分结果（>=3条且标题真实），
+    # 走"重分类 + 后处理 + 规则补充"后采用。
+    # 常见场景：模型漏输出国际栏（国际0条/国内4条），此时整篇丢弃太可惜，
+    # 重新分类后由规则把国际栏补齐即可，避免直接退回全规则版。
+    if (
+        best_partial
+        and best_count >= 3
+        and _validate_titles_exist(best_partial, news_items)
+    ):
+        print(
+            f"[summarize] 无 provider 完全达标，采用条数最多的部分结果"
+            f"({best_count}条)并重新分类/补充缺失栏位"
+        )
+        sections = _post_filter_sections(best_partial)
+        sections = _reclassify_sections(sections)
+        sections = _fill_missing_sections(sections, news_items)
+        sections = _deduplicate_sections(sections)
+        return sections_to_markdown(sections)
 
     print("[summarize] 所有 LLM 均不可用或格式不达标，退回规则筛选")
     return rule_summary(news_items)

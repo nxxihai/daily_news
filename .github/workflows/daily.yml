@@ -1,26 +1,29 @@
 # 每日新闻早报 - 云端定时推送
 #
-# 触发时间：每天北京时间 08:00（GitHub Actions 用 UTC，北京 8 点 = UTC 0 点）
-# 手动触发：仓库 Actions 页面 → Daily News Report → Run workflow 按钮
+# 触发方式：由 cron-job.org 按北京时间 7:30 调用 GitHub API 触发 workflow_dispatch
+# （准点、可靠，不受 GitHub 调度延迟影响）。本 workflow 内不再设 schedule。
+# 也可在 Actions 页面 → Daily News Report → Run workflow 手动触发。
 #
 # 首次使用前，请在仓库 Settings → Secrets and variables → Action 添加：
-#   TIANAPI_KEY       天行数据 key（你 config.py 里那串）
-#   OPENROUTER_API_KEY OpenRouter key（你 config.py 里那串 sk-or-v1-...）
-#   SERVERCHAN_KEY    Server酱 SendKey（你 config.py 里那串 SCT...）
-#   ZHIPU_API_KEY     智谱 GLM-4.7-Flash key（永久免费）
-#   MODELSCOPE_API_KEY 魔搭 ModelScope key（主模型 stepfun-ai/Step-3.7-Flash）
-#   JUHE_KEY          可选，聚合数据 key，没有可留空不填
-#   PUSHPLUS_TOKEN    可选，PushPlus token，没有可留空不填
+#   DEEPSEEK_API_KEY     DeepSeek 官方 key（推荐付费通道，最优先使用，稳定且极便宜）
+#   TIANAPI_KEY          天行数据 key（你 config.py 里那串）
+#   OPENROUTER_API_KEY   OpenRouter key（你 config.py 里那串 sk-or-v1-...）
+#   SERVERCHAN_KEY       Server酱 SendKey（你 config.py 里那串 SCT...）
+#   ZHIPU_API_KEY        智谱 GLM-4.7-Flash key（永久免费）
+#   MODELSCOPE_API_KEY   魔搭 ModelScope key（主模型 stepfun-ai/Step-3.7-Flash）
+#   FREELLMAPI_API_KEY   FreeLLMAPI key（优先，若你要用它）
+#   FREELLMAPI_BASE_URL  FreeLLMAPI Base URL（可选，默认会走官方地址）
+#   FREELLMAPI_MODEL    FreeLLMAPI 模型名（可选，默认 qwen3-8b）
+#   JUHE_KEY             可选，聚合数据 key，没有可留空不填
+#   PUSHPLUS_TOKEN       可选，PushPlus token，没有可留空不填
 # 没填的环境变量会自动回退到 config.py 里的默认值，本地照常、云端不中断。
 
 name: Daily News Report
 
 on:
-  schedule:
-    - cron: '5 3 * * *'      # 测试：UTC 03:05 = 北京 11:05
-    - cron: '15 3 * * *'     # 测试：UTC 03:15 = 北京 11:15
-    - cron: '25 3 * * *'     # 测试：UTC 03:25 = 北京 11:25
-  workflow_dispatch:          # 支持在网页上手动触发（部署后先用这个测试）
+  # 不设 schedule：定时统一交给 cron-job.org 触发下面的 workflow_dispatch。
+  # 二者只能取其一，同时开着会导致一天推送多次。
+  workflow_dispatch:          # 被 cron-job.org 调用；也可在 Actions 页面手动 Run workflow
 
 permissions:
   contents: write             # 允许把去重记录 data/seen.json 写回仓库
@@ -54,6 +57,9 @@ jobs:
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           MODELSCOPE_API_KEY: ${{ secrets.MODELSCOPE_API_KEY }}
+          FREELLMAPI_API_KEY: ${{ secrets.FREELLMAPI_API_KEY }}
+          FREELLMAPI_BASE_URL: ${{ secrets.FREELLMAPI_BASE_URL }}
+          FREELLMAPI_MODEL: ${{ secrets.FREELLMAPI_MODEL }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: python run_daily.py
 

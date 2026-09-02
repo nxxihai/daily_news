@@ -25,7 +25,7 @@ GOSSIP_KEYWORDS = [
     # 电影/影评/娱乐节目
     "影迷评", "观影团", "首映礼", "首映抢票", "免费抢票", "笑点密集",
     "青春特辑", "影迷", "影评", "豆瓣", "烂片", "好片",
-    "明星同款", "娱乐圈", "爱豆",
+    "明星同款", "娱乐圈", "爱豆", "亮相",
 ]
 
 # 游戏新闻关键词（游戏资讯不属于要闻，热点中也以社会新闻为主）
@@ -34,6 +34,9 @@ GAME_KEYWORDS = [
     "steam", "Steam", "Epic", "Switch", "PS5", "Xbox", "手游", "端游",
     "玩家", "副本", "赛季", "版本更新", "补丁", "新英雄", "新皮肤",
     "典藏版", "重制版", "复刻版", "打折", "优惠", "特惠", "喜加一",
+    # 游戏硬件/电竞（数码软文常借游戏名义，标题或摘要命中即算）
+    "游戏手机", "游戏本", "电竞本", "电竞", "开黑", "联机", "网游",
+    "MOBA", "游戏党", "游戏性能", "帧率", "显卡",
 ]
 
 # 个股/期货/ETF/研报/彩票/博彩类关键词（纯投资/博彩信息不是大众新闻）
@@ -75,9 +78,27 @@ LOW_VALUE_PATTERNS = [
     r"微博观影团|影迷评|笑点密集",                             # 影评
     r"发布(?:20\d{2}|最新).*?(?:中期|年度|季度)业绩",           # 公司业绩公告
     r"营业收入\d+[.亿万]+.*?同比(?:增长|下降|增|降)",            # 公司营收数据
+    r"首次亮相|红毯亮相|当选.*团长|任.*团长",                   # 娱乐/文艺人事
+    r"夺冠.*奥运|夺冠.*冠军|网球.*夺冠|篮球.*夺冠|足球.*夺冠",  # 体育赛事
+    # 公司/股东增减持（纯资本运作，无大众公共价值）
+    r"(?:获|遭|完成|拟|再获|实施).{0,10}(?:增持|减持)",          # 获XX大手笔增持
+    r"(?:增持|减持).{0,10}(?:股份|股权|万股|亿股|港元|美元|涉资|%股权|大手笔)",  # 增持XX股份
+    r"(?:增持|减持).{0,8}(?:涉资|套现|大手笔|连续)",             # 增持涉资X
+    # 公司财年/财季财报（外国公司财报非宏观要闻，源头即拦截）
+    r"财年.{0,14}(?:营收|净利|净亏|利润|亏损|财报)",             # 2027财年第二财季营收X
+    r"(?:营收|净利|利润|亏损).{0,14}财年",                       # 营收X亿…2027财年
+    r"(?:营收|收入|净利|利润|亏损|销售额).{0,20}亿(?:美元|欧元|港元|日元|英镑)",  # 营收470亿美元
+    # 网络热梗式标题（无信息量，蹭热度文）
+    r"承包[了]?.{0,10}(?:笑点|泪点|热搜|流量)",                  # 承包了全网笑点
+    r"(?:万万没想到|破防了|绝绝子|YYDS|yyds|狠狠爱住|坐不住了|全网沸腾)",  # 网络热梗
+    # 数码导购/评测软文（电商软文，不是新闻）
+    r"(?:怎么选|如何选|哪款好|选购指南|购买指南|横评|实测对比|性价比对比|值得买|好不好用|可以选吗)",
+    r"(?:游戏手机|游戏本|电竞本|游戏党|电竞屏)",                  # 游戏硬件导购
+    r"^重新定义.{0,12}",                                        # 营销腔标题（多为软广）
+    r"(?:高性价比|好用不贵|闭眼入|入手不亏|种草)",                # 导购话术
 ]
 
-SEEN_KEEP_DAYS = 30  # 历史去重记录保留天数
+SEEN_KEEP_DAYS = 3   # 历史去重记录保留天数（缩短到3天，避免旧新闻长期占坑导致内容重复）
 
 
 def normalize_title(title):
@@ -134,6 +155,9 @@ def is_investment_noise(title):
         "快讯：", "概念股", "板块走强", "板块走弱",
         "日内跌幅", "日内涨幅", "美元/盎司", "美元/桶",
         "影迷评", "观影团", "笑点密集", "投票调查",
+        # 股东增减持等个股资本运作、金融机构人事任命/债券发行（对大众无感）
+        "增持", "减持", "任职资格", "获批担任", "获批任职",
+        "金融债券", "中期票据", "超短期融资券", "可转债",
     ]
     for kw in instant_filter:
         if kw in title:
@@ -163,9 +187,38 @@ def is_investment_noise(title):
     return False
 
 
-def is_low_quality(title):
-    """综合判断是否为低质量新闻，应被过滤。"""
-    return is_gossip(title) or is_game_news(title) or is_investment_noise(title)
+def is_sports_news(title):
+    """是否属于体育赛事结果新闻（非体育经济/产业新闻）。"""
+    sports_indicators = ["夺冠", "冠军", "亚军", "季军", "金牌", "银牌", "铜牌", "破纪录", "卫冕", "绝杀", "逆转"]
+    sports_events = ["奥运会", "奥运", "冬奥会", "亚运会", "全运会", "世锦赛", "世界杯"]
+    sports_types = ["网球", "篮球", "足球", "排球", "乒乓球", "羽毛球", "游泳", "田径", "体操"]
+    
+    has_indicator = any(kw in title for kw in sports_indicators)
+    has_event = any(kw in title for kw in sports_events)
+    has_type = any(kw in title for kw in sports_types)
+    
+    # 有赛事指标 + 有赛事名称/类型 = 体育新闻
+    if has_indicator and (has_event or has_type):
+        return True
+    return False
+
+
+def is_low_quality(title, summary=""):
+    """综合判断是否为低质量新闻，应被过滤。
+
+    标题与摘要一并检查：很多游戏/导购软文的特征词只出现在摘要里
+    （如"游戏手机对比"的摘要列出《英雄联盟》《CS2》等游戏名），
+    只看标题会漏掉。摘要只取前 150 字，避免长文里偶然出现的词误伤。
+    """
+    text = title
+    if summary:
+        text = title + " " + str(summary)[:150]
+    return (
+        is_gossip(text)
+        or is_game_news(text)
+        or is_investment_noise(text)
+        or is_sports_news(text)
+    )
 
 
 # ============== 重要性评分：规则降级时按分数排序 ==============
@@ -177,14 +230,18 @@ HIGH_IMPORTANCE_KEYWORDS = [
     "中央", "中共中央", "中办", "国办", "外交部", "国防部", "发改委",
     "央行", "证监会", "银保监", "工信部", "公安部", "教育部", "卫健委",
     "政策", "新规", "条例", "法案", "法律", "法规", "国务院常务会议",
-    # 国际政治
+    # 国际政治（权重最高）
     "总统", "首相", "总理", "国王", "主席", "联合国", "欧盟", "北约",
     "G7", "G20", "APEC", "金砖", "上合组织", "白宫", "克里姆林宫", "国会",
     "特朗普", "拜登", "普京", "马克龙", "泽连斯基", "金正恩", "莫迪",
+    "哈梅内伊", "内塔尼亚胡", "苏纳克", "岸田", "朔尔茨", "埃尔多安",
+    "伊朗", "以色列", "巴勒斯坦", "黎巴嫩", "叙利亚", "伊拉克", "阿富汗",
+    "也门", "胡塞", "哈马斯", "真主党", "塔利班",
     # 重大事件
     "地震", "台风", "洪水", "火灾", "爆炸", "事故", "遇难", "死亡",
     "疫情", "疫苗", "战争", "冲突", "空袭", "导弹", "制裁", "停火",
     "峰会", "会晤", "访问", "会谈", "签署", "协议", "条约", "宣言",
+    "谈判", "撤军", "入侵", "占领", "轰炸", "击落", "击沉",
 ]
 
 # 中重要性：经济民生、科技突破、社会热点
@@ -217,10 +274,25 @@ def importance_score(news_item):
     score = 0
     cat = news_item.get("category", "")
 
+    # 旧闻降权：标题包含过去月份（非当前月）或明确旧年份，大幅降低分数
+    current_month = datetime.now().month
+    # 匹配 "X月" 或 "XX月" 格式
+    month_match = re.search(r"(\d{1,2})月", title)
+    if month_match:
+        news_month = int(month_match.group(1))
+        if news_month != current_month and 1 <= news_month <= 12:
+            score -= 100  # 旧月份新闻大幅降权
+    # 匹配旧年份（2020-2025），无论是否带"年"字（如"2025中法文化之春"也能命中）
+    year_match = re.search(r"(?<!\d)202[0-5](?!\d)", title)
+    if year_match:
+        score -= 150  # 旧年份新闻几乎排除
+
     # 来源加分：权威媒体优先
     source = news_item.get("source", "")
     if "新浪" in source:
         score += 20
+    if "早报" in source:
+        score += 18  # 联合早报：国际新闻质量高
     if "天行" in source:
         score += 15
     if "百度" in source:
@@ -246,7 +318,19 @@ def importance_score(news_item):
     else:
         score += 5
 
-    # 关键词加分
+    # 关键词加分（国际政治人物/冲突地区权重最高）
+    intl_politics = [
+        "特朗普", "拜登", "普京", "马克龙", "泽连斯基", "金正恩", "莫迪",
+        "哈梅内伊", "内塔尼亚胡", "伊朗", "以色列", "巴勒斯坦", "黎巴嫩",
+        "叙利亚", "伊拉克", "阿富汗", "也门", "胡塞", "哈马斯", "真主党",
+        "战争", "冲突", "空袭", "导弹", "制裁", "停火", "谈判", "撤军",
+        "入侵", "占领", "轰炸", "击落", "击沉",
+    ]
+    for kw in intl_politics:
+        if kw in title:
+            score += 80  # 国际政治/军事新闻最高优先级
+            break
+
     for kw in HIGH_IMPORTANCE_KEYWORDS:
         if kw in title:
             score += 50
@@ -261,6 +345,17 @@ def importance_score(news_item):
         if kw in title:
             score -= 15
             break
+
+    # 财经市场/公司动态降权：早报要闻以政治/外交/军事/灾害/民生为主，
+    # 央行加息、公司持股、裁员、负债等属于专业财经，规则降级时不该占满版面
+    # （降权而非过滤：当天确实只有财经要闻时仍可入选）
+    finance_noise = [
+        "加息", "降息", "通胀", "通缩", "国债收益率", "日经", "道指", "纳指",
+        "美股", "港股", "A股", "股价", "持股", "市值", "营收", "财报",
+        "裁员", "裁减", "负债", "商社", "基金", "投资者", "招股",
+    ]
+    if any(kw in title for kw in finance_noise):
+        score -= 40
 
     # 有摘要的新闻优先（信息更完整）
     if news_item.get("summary"):
@@ -308,11 +403,71 @@ def filter_fresh(news, seen):
     return [n for n in news if title_hash(n["title"]) not in seen]
 
 
+MAX_NEWS_AGE_DAYS = 2   # 带时间戳的新闻最多保留 2 天内的（今天+昨天）
+
+
+def _parse_item_datetime(n):
+    """从新闻条目解析发布时间（ctime 支持时间戳或日期字符串），失败返回 None。"""
+    raw = str(n.get("ctime", "") or "").strip()
+    if not raw:
+        return None
+    # 纯数字按 Unix 时间戳处理
+    if raw.isdigit():
+        try:
+            return datetime.fromtimestamp(int(raw))
+        except (ValueError, OSError, OverflowError):
+            return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def filter_by_date(news):
+    """过滤旧闻：优先按时间戳硬过滤，其次按标题/摘要中的日期文本过滤。
+
+    - 条目带可解析的发布时间（ctime）：超过 MAX_NEWS_AGE_DAYS 天直接丢弃
+      （可杜绝天行/聚合等接口返回的陈年缓存新闻）
+    - 文本中出现旧年份（2020-2025，不论是否带"年"字）或明显过去月份：丢弃
+    """
+    now = datetime.now()
+    current_month = now.month
+    filtered = []
+    for n in news:
+        # 1. 时间戳硬过滤（最可靠）
+        dt = _parse_item_datetime(n)
+        if dt is not None and (now - dt).days >= MAX_NEWS_AGE_DAYS:
+            continue
+        text = n.get("title", "") + " " + n.get("summary", "")
+        # 2. 排除旧年份（2020-2025，带不带"年"字都算，如"2025中法文化之春"）
+        if re.search(r"(?<!\d)202[0-5](?!\d)", text):
+            continue
+        # 排除过去月份（非当前月8月，且是6月及更早的）
+        # 匹配单个月份："4月"、"5月"等
+        month_match = re.search(r"(\d{1,2})月", text)
+        if month_match:
+            news_month = int(month_match.group(1))
+            if news_month != current_month and news_month <= 6:
+                continue
+        # 匹配月份范围："4至7月"、"4-7月"、"4~7月"等
+        range_match = re.search(r"(\d{1,2})[\-~至](\d{1,2})月", text)
+        if range_match:
+            start_month = int(range_match.group(1))
+            end_month = int(range_match.group(2))
+            # 如果范围完全在当前月之前（如4-7月，当前是8月）
+            if end_month < current_month:
+                continue
+        filtered.append(n)
+    return filtered
+
+
 def filter_quality(news):
     """过滤低质量新闻（花边/游戏/投资噪音），返回过滤后的列表。"""
     filtered = []
     for n in news:
-        if is_low_quality(n["title"]):
+        if is_low_quality(n["title"], n.get("summary", "")):
             continue
         filtered.append(n)
     return filtered
