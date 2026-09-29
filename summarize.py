@@ -1,4 +1,4 @@
-"""AI 提炼层：用 LLM 筛选最有价值的新闻并重写为短摘要。
+﻿"""AI 提炼层：用 LLM 筛选最有价值的新闻并重写为短摘要。
 
 核心改进：
 - 支持多个 LLM Provider 按顺序尝试，第一个成功且格式达标即启用
@@ -256,7 +256,7 @@ def _do_request(provider, prompt):
         "temperature": 0.3,
         # 输出 15 条(标题+摘要)约 1200-1800 tokens，2500 足够；
         # 再大容易触发部分免费模型的 max_tokens 上限校验（400 Bad Request）
-        "max_tokens": 2500,
+        "max_tokens": 3500,
     }
     if provider.get("extra_body"):
         payload.update(provider["extra_body"])
@@ -1218,3 +1218,8 @@ if __name__ == "__main__":
     items = filter_quality(items)
     print(f"质量过滤后：{len(items)} 条")
     print(summarize(items))
+
+
+
+
+
