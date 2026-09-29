@@ -11,7 +11,8 @@
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+BJT = timezone(timedelta(hours=8))  # 北京时间
 
 import requests
 
@@ -381,7 +382,7 @@ def collect_all():
 
 
 if __name__ == "__main__":
-    print(f"采集时间：{datetime.now():%Y-%m-%d %H:%M:%S}")
+    print(f"采集时间：{datetime.now(BJT):%Y-%m-%d %H:%M:%S}")
     news = collect_all()
     print(f"\n合计 {len(news)} 条，按分类统计：")
     counts = {}

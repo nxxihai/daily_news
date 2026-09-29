@@ -12,7 +12,8 @@ import re
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+BJT = timezone(timedelta(hours=8))  # 北京时间
 
 import requests
 
@@ -179,7 +180,7 @@ def build_prompt(news_items, per_section=None, per_line=None):
         for i, n in enumerate(news_items)
     )
     # 动态日期：提示词里的"今天"必须跟随真实运行日期，不能写死
-    _now = datetime.now()
+    _now = datetime.now(BJT)
     today_cn = f"{_now.year}年{_now.month}月{_now.day}日"
     today_iso = _now.strftime("%Y-%m-%d")
     yesterday_iso = (_now - timedelta(days=1)).strftime("%Y-%m-%d")

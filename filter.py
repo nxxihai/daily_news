@@ -10,8 +10,11 @@
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# 北京时间（UTC+8）：与 run_daily.py 保持一致，避免系统时区偏差
+BJT = timezone(timedelta(hours=8))
 
 # ============== 黑名单：命中即过滤，不进入候选池 ==============
 
@@ -275,7 +278,7 @@ def importance_score(news_item):
     cat = news_item.get("category", "")
 
     # 旧闻降权：标题包含过去月份（非当前月）或明确旧年份，大幅降低分数
-    current_month = datetime.now().month
+    current_month = datetime.now(BJT).month
     # 匹配 "X月" 或 "XX月" 格式
     month_match = re.search(r"(\d{1,2})月", title)
     if month_match:
@@ -382,7 +385,7 @@ def save_seen(path, seen):
     """保存历史去重记录，只保留最近 SEEN_KEEP_DAYS 天。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    cutoff = (datetime.now() - timedelta(days=SEEN_KEEP_DAYS)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(BJT) - timedelta(days=SEEN_KEEP_DAYS)).strftime("%Y-%m-%d")
     cleaned = {h: d for h, d in seen.items() if d >= cutoff}
     path.write_text(
         json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -391,7 +394,7 @@ def save_seen(path, seen):
 
 def mark_seen(seen, titles, today=None):
     """把已推送成功的标题记入去重记录，返回更新后的字典。"""
-    today = today or datetime.now().strftime("%Y-%m-%d")
+    today = today or datetime.now(BJT).strftime("%Y-%m-%d")
     seen = dict(seen)
     for t in titles:
         seen[title_hash(t)] = today
@@ -432,7 +435,7 @@ def filter_by_date(news):
       （可杜绝天行/聚合等接口返回的陈年缓存新闻）
     - 文本中出现旧年份（2020-2025，不论是否带"年"字）或明显过去月份：丢弃
     """
-    now = datetime.now()
+    now = datetime.now(BJT)
     current_month = now.month
     filtered = []
     for n in news:

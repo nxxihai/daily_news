@@ -14,10 +14,13 @@ import re
 import socket
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import urllib3.util.connection
+
+# 北京时间（UTC+8）：硬编码时区，避免系统时区设置不对导致日期错位
+BJT = timezone(timedelta(hours=8))
 
 
 def _force_ipv4():
@@ -55,7 +58,7 @@ SEEN_FILE = DATA_DIR / "seen.json"
 
 def main(dry_run=False):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(BJT).strftime("%Y-%m-%d")
 
     # 1. 采集
     news = collect_all()
