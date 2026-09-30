@@ -476,3 +476,4 @@ def filter_quality(news):
     return filtered
 
 
+
