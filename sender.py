@@ -1,9 +1,16 @@
-"""微信推送：Server酱（主通道）+ PushPlus（备用通道）。
+﻿"""微信推送：Server酱（主通道）+ PushPlus（备用通道）。
 
 send() 会先走 Server酱，失败自动切 PushPlus，两边都失败才算失败。
 """
 
 import requests
+import urllib3
+
+# 关闭 SSL 证书验证警告（解决本地 Python 证书库过期导致的 CERTIFICATE_VERIFY_FAILED）
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 全局设置 requests 不验证 SSL（本地测试用，云端 GitHub Actions 环境正常）
+requests.packages.urllib3.disable_warnings()
 
 from config import PUSHPLUS_TOKEN, SERVERCHAN_KEY
 
@@ -17,6 +24,7 @@ def send_serverchan(title, markdown):
             f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send",
             params={"title": title, "desp": markdown},
             timeout=15,
+            verify=False,
         )
         data = resp.json()
         if data.get("code") == 0:
@@ -40,6 +48,7 @@ def send_pushplus(title, markdown):
                 "template": "markdown",
             },
             timeout=15,
+            verify=False,
         )
         data = resp.json()
         if data.get("code") == 200:
