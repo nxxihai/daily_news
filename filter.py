@@ -435,7 +435,7 @@ def filter_by_date(news):
       （可杜绝天行/聚合等接口返回的陈年缓存新闻）
     - 文本中出现旧年份（2020-2025，不论是否带"年"字）或明显过去月份：丢弃
     """
-    now = datetime.now(BJT)
+    now = datetime.now(BJT).replace(tzinfo=None)  # 去掉时区，和 dt 保持一致，避免相减报错
     current_month = now.month
     filtered = []
     for n in news:
@@ -474,6 +474,7 @@ def filter_quality(news):
             continue
         filtered.append(n)
     return filtered
+
 
 
 
