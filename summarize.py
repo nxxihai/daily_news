@@ -218,31 +218,36 @@ def build_prompt(news_items, per_section=None, per_line=None):
    同一热点主线只保留最重要的一条：例如同一场冲突的多条节点进展（打击、爆炸、断交、
    伤亡等），最多选1条信息最全的，不要连续刷屏同一主题。
    例如：西藏泥石流事件只能出现在一个分类中，不能同时出现在国内和热点。
-3. 每条摘要必须比标题多写出具体事实：主体、地点、数字、结果或表态，让读者只看摘要
-   就能了解发生了什么。
-   严禁把标题换个说法复述一遍——例如标题"美军称完成一波对伊朗军事目标打击"，
-   摘要若写"美军对伊朗军事目标进行打击"就是零信息量的灌水，应换一条能写清楚的新闻。
-   摘要字数：40至{per_line + 30}字左右（最短不低于15字，最长不超过120字），
-   信息完整、句子通顺即可，不必严格卡字数。
-4. 摘要必须是完整句子，严禁用省略号"…"或"......"截断结尾。
-   摘要必须以句号"、感叹号"！"或问号"？"结尾，不能以逗号、顿号或单个汉字结尾。
+3. 每条输出两行：第一行是**要点**（一二十字的新闻核心，允许把真实标题精简压缩，
+   但必须保留关键人名/国名/地名/数字）；第二行是**介绍**（一句话，20至{per_line}字左右、
+   最长不超过120字，必须写出标题之外的具体事实：主体、时间、地点、数字、结果或表态）。
+   严禁把要点换个说法复述一遍——例如要点"美军完成对伊朗军事目标打击"，
+   介绍若写"美军对伊朗军事目标进行打击"就是零信息量的灌水，应换一条能写清楚的新闻。
+4. 介绍必须是完整句子，严禁用省略号"…"或"......"截断结尾。
+   介绍必须以句号"、感叹号"！"或问号"？"结尾，不能以逗号、顿号或单个汉字结尾。
    错误示例："日本防卫省甚至。"、"推动加快构建房地产发展新模。"、"比口岸高出1000米，可。"、"同比增长。"
    正确示例："日本防卫省甚至考虑允许招募文身者以解决人员短缺问题。"
-5. 标题必须使用新闻的真实标题，不要自己编造标题。
+5. 要点必须源自候选新闻的真实标题（允许精简压缩），不得编造不存在的新闻；介绍与要点必须属于同一条新闻。
 6. 数量要求：【国际】【国内】【热点】三个分类每个至少输出2条，最多输出{per_section}条。不要只输出1条或0条。
 7. 必须简体中文，严格按下面格式输出，不要输出任何解释、思考、前后缀：
 
 【国际】
-1. **真实新闻标题**：{per_line}字左右的完整摘要
-2. **真实新闻标题**：{per_line}字左右的完整摘要
+1. **一二十字的要点**
+介绍：一句话，补充具体事实（时间/地点/数字/结果）。
+2. **一二十字的要点**
+介绍：一句话，补充具体事实。
 
 【国内】
-1. **真实新闻标题**：{per_line}字左右的完整摘要
-2. **真实新闻标题**：{per_line}字左右的完整摘要
+1. **一二十字的要点**
+介绍：一句话，补充具体事实。
+2. **一二十字的要点**
+介绍：一句话，补充具体事实。
 
 【热点】
-1. **真实新闻标题**：{per_line}字左右的完整摘要
-2. **真实新闻标题**：{per_line}字左右的完整摘要"""
+1. **一二十字的要点**
+介绍：一句话，补充具体事实。
+2. **一二十字的要点**
+介绍：一句话，补充具体事实。"""
 
 
 def _do_request(provider, prompt):
@@ -397,18 +402,27 @@ def _validate_titles_exist(sections, news_items):
             norm = normalize_title(title)
             if len(norm) < 4:
                 continue
-            # 取前4-6个字符做核心匹配
-            for core_len in [6, 5, 4]:
-                core = norm[:core_len]
-                if any(core in ct for ct in candidate_titles):
-                    matched += 1
+            # 要点允许对原标题做精简压缩，判定放宽：
+            # 1) 与任一候选标题的最长公共子串 >= 4 字 → 匹配
+            # 2) 或共享数字（如"3800万"）且去数字后公共子串 >= 3 字 → 匹配
+            hit = False
+            for ct in candidate_titles:
+                if len(ct) < 4:
+                    continue
+                if _longest_common_substring_len(norm, ct) >= 4:
+                    hit = True
                     break
-                if any(ct[:core_len] in norm for ct in candidate_titles if len(ct) >= core_len):
-                    matched += 1
+                nums = set(re.findall(r"\d+", norm)) & set(re.findall(r"\d+", ct))
+                if nums and _longest_common_substring_len(
+                    re.sub(r"\d+", "", norm), re.sub(r"\d+", "", ct)
+                ) >= 3:
+                    hit = True
                     break
+            if hit:
+                matched += 1
     if total == 0:
         return False
-    # 允许个别标题有轻微改写，80%匹配即通过
+    # 允许个别要点有轻微改写/压缩，70%匹配即通过
     return matched / total >= 0.7
 
 
@@ -707,12 +721,13 @@ def _rich_summary(n, per_line=None):
 
 
 def sections_to_markdown(sections, per_line=None):
-    """根据去重后的 sections 重新生成规范 markdown。
+    """根据去重后的 sections 重新生成规范 markdown（简报格式：要点+介绍两行）。
 
-    摘要规则：
-    - 摘要有实质内容 → "**标题**：摘要"
-    - 摘要为空或只是标题复述（无简介的新闻源以标题成行）→ 只输出加粗标题，
-      避免"标题：标题"的重复观感
+    格式：
+        1. **要点（一二十字）**
+        介绍（一句话，补充具体事实）
+    - 要点：标题或 LLM 压缩后的要点
+    - 介绍：摘要；为空或只是要点复述时，只输出要点行
     """
     per_line = per_line or NEWS_PER_LINE
     lines = []
@@ -724,7 +739,9 @@ def sections_to_markdown(sections, per_line=None):
         lines.append("")
         idx = 0
         for title, summary in items:
-            # 清理摘要
+            # 清理要点
+            t = title.strip().strip("*").strip()
+            # 清理介绍
             s = summary.strip()
             s = s.replace("**", "").replace("*", "").strip()
             # 去掉尾部省略号（中英文省略号、连续句号等变体）
@@ -732,34 +749,31 @@ def sections_to_markdown(sections, per_line=None):
             # 修复明显截断：以逗号、顿号结尾的，去掉末尾标点
             while s and s[-1] in "，、；：":
                 s = s[:-1].rstrip()
-            # 无实质摘要，或摘要只是标题复述 → 以标题直接成行（不重复显示摘要）
-            if not s or _is_title_repeat(title, s):
-                idx += 1
-                lines.append(f"{idx}. **{title}**")
+            idx += 1
+            # 无实质介绍，或介绍只是要点复述 → 只输出要点行
+            if not s or _is_title_repeat(t, s):
+                lines.append(f"{idx}. **{t}**")
                 lines.append("")
                 continue
-            # 如果摘要没有句末标点，补一个句号
+            # 介绍没有句末标点，补一个句号
             if not re.search(r"[。！？]$", s):
                 s += "。"
-            # 如果摘要太短（不足20字），尝试用标题补充关键信息
-            if len(s) < 20:
-                if title not in s:
-                    combined = title + "：" + s
-                    if len(combined) <= 120:
-                        s = combined
-                    else:
-                        s = title + "。"
-            # 如果摘要太短（不足10字），可能被截断，用标题兜底
-            if len(s) < 10:
-                s = title + "。"
-            idx += 1
-            lines.append(f"{idx}. **{title}**：{s}")
+            lines.append(f"{idx}. **{t}**")
+            lines.append(s)
             lines.append("")
     return "\n".join(lines).strip()
 
 
 def parse_markdown(text):
-    """解析 LLM 输出的 markdown，返回 {分类: [(标题, 摘要)]}。"""
+    """解析 LLM 输出的 markdown，返回 {分类: [(标题/要点, 摘要/介绍)]}。
+
+    支持两种行格式：
+    A. 新格式（简报两行）：
+       1. **一二十字要点**
+       一句话介绍。
+    B. 旧格式（一行）：
+       1. **标题**：摘要
+    """
     sections = {}
     pos = 0
     while pos < len(text):
@@ -771,21 +785,31 @@ def parse_markdown(text):
         next_m = re.search(r"【(国际|国内|热点)】", text[start:])
         end = start + next_m.start() if next_m else len(text)
         items = []
-        for line in text[start:end].splitlines():
-            line = line.strip()
-            # 匹配 "1. **标题**：摘要" 或 "1. 标题：摘要" 或 "1、标题：摘要"
-            mm = re.match(r"^\d+[\.、]\s*(.+?)[：:]\s*(.*)$", line)
-            if mm:
-                raw_title = mm.group(1).strip()
-                raw_summary = mm.group(2).strip()
-                # 清理标题中多余的粗体标记
-                title = raw_title.replace("**", "").strip()
-                # 清理摘要中残留的粗体标记和其他markdown符号
-                summary = raw_summary.replace("**", "").replace("*", "").strip()
-                # 清理摘要末尾可能残留的标记
-                summary = summary.rstrip("*").strip()
-                if title and summary:
-                    items.append((title, summary))
+        lines = [ln.strip() for ln in text[start:end].splitlines() if ln.strip()]
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            mm = re.match(r"^\d+[\.、]\s*(.+?)$", line)
+            if not mm:
+                i += 1
+                continue
+            raw = mm.group(1).strip()
+            # 旧格式一行："标题：摘要"
+            if "：" in raw or ":" in raw:
+                sep = "：" if "：" in raw else ":"
+                t, _, s = raw.partition(sep)
+                title = t.strip().strip("*")
+                summary = s.strip().strip("*").rstrip("*").strip()
+            else:
+                title = raw.strip("*").strip()
+                summary = ""
+                # 新格式两行：下一行非空且不以"数字."开头 → 作为介绍
+                if i + 1 < len(lines) and not re.match(r"^\d+[\.、]", lines[i + 1]):
+                    summary = lines[i + 1].strip()
+                    i += 1
+            if title and summary:
+                items.append((title, summary))
+            i += 1
         if items:
             sections[sec] = items
         pos = start
@@ -1060,7 +1084,7 @@ def rule_summary(news_items, per_section=None, per_line=None):
                         rich_counts[sec] += 1
                     used.append((norm, n.get("summary") or ""))
 
-    # 生成 markdown（富简介优先；仅在富条不足时用标题兜底，避免空栏）
+    # 生成 markdown（简报格式：要点行 + 介绍行；富简介优先，不足时标题兜底）
     lines = []
     for sec in SECTIONS:
         items = result[sec]
@@ -1072,12 +1096,13 @@ def rule_summary(news_items, per_section=None, per_line=None):
         for n in items[:total]:
             s = _one_line_summary(n, per_line)
             idx += 1
+            lines.append(f"{idx}. **{n['title']}**")
             if s is None:
-                # 无实质简介：标题本身直接成行，避免"标题：标题"重复
-                lines.append(f"{idx}. **{n['title']}**")
+                # 无实质简介：只输出要点行
+                lines.append("")
             else:
-                lines.append(f"{idx}. **{n['title']}**：{s}")
-            lines.append("")
+                lines.append(s)
+                lines.append("")
     return "\n".join(lines).strip()
 
 
@@ -1099,9 +1124,10 @@ def summarize(news_items):
     fix_prompt = prompt + (
         f"\n\n【重要提醒】你上次输出格式不正确或内容不完整，请严格按上面的格式重新输出，"
         f"确保【国际】【国内】【热点】三个分类每个至少2条、最多{NEWS_PER_SECTION}条新闻，"
-        f"每条格式为「数字. **标题**：摘要」，摘要必须完整句子、15-120字均可，"
-        f"不要用省略号结尾。每条摘要必须写出标题之外的具体事实（谁/何时/何地/结果或数字），"
-        f"严禁把标题换个说法复述一遍；某条写不出实质内容就换另一条候选。"
+        f"每条输出两行：第一行「数字. **要点**」（一二十字的新闻核心，可压缩真实标题），"
+        f"第二行是一句话介绍（20-60字，必须写出标题之外的具体事实：谁/何时/何地/结果或数字），"
+        f"介绍必须是完整句子、不要用省略号结尾。"
+        f"严禁把要点换个说法复述一遍；某条写不出实质内容就换另一条候选。"
         f"国际栏必须包含至少1条重大国际政治/军事新闻。"
     )
 

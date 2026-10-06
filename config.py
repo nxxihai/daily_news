@@ -139,5 +139,5 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN") or ""
 
 # ================= 内容设置 =================
 NEWS_PER_SECTION = 5    # 每类新闻条数（国际/国内/热点 各 5 条，共 15 条）
-NEWS_PER_LINE = 80      # 每条摘要目标字数（放宽到80，避免完整摘要被截断成半句）
+NEWS_PER_LINE = 60      # 每条"介绍"的目标字数（简报格式：一句话介绍，20~60字）
 FALLBACK_EXTRA_PER_SECTION = 3  # AI 全失效时，规则兜底每栏多加 3 条（一句话新闻，共 24 条）
