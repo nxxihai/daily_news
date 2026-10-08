@@ -503,94 +503,76 @@ def _fill_missing_sections(sections, news_items, per_section=None):
     for sec in grouped:
         grouped[sec].sort(key=importance_score, reverse=True)
 
+    def _fill_from(pool, current, needed):
+        """从候选池补充条目，返回剩余缺口。与已选同事件/同主线的不补。"""
+        for n in pool:
+            if needed <= 0:
+                break
+            norm = normalize_title(n["title"])
+            if norm in used_titles:
+                continue
+            if any(
+                _is_same_event(norm, n.get("summary") or n["title"], u_t, u_s)
+                for u_t, u_s in used_pairs
+            ):
+                print(f"[补充跳过] 与已选同主线：{n['title'][:30]}...")
+                continue
+            summary = _make_fill_summary(n, norm)
+            if summary is None:
+                continue
+            current.append((n["title"], summary))
+            used_pairs.append((norm, summary))
+            used_titles.add(norm)
+            needed -= 1
+        return needed
+
     # 补充缺失分类或不足条数（同分类优先，不足时从其他分类补充）
     for sec in SECTIONS:
         current = sections.get(sec, [])
         needed = per_section - len(current)
         if needed > 0:
-            # 先尝试同分类
-            for n in grouped.get(sec, []):
-                if needed <= 0:
-                    break
-                norm = normalize_title(n["title"])
-                if norm in used_titles:
-                    continue
-                # 与已选内容同事件/同主线的不再补充（避免同主题刷屏）
-                if any(
-                    _is_same_event(norm, n.get("summary") or n["title"], u_t, u_s)
-                    for u_t, u_s in used_pairs
-                ):
-                    print(f"[补充跳过] 与已选同主线：{n['title'][:30]}...")
-                    continue
-                # 有实质简介优先；无简介但标题信息完整(>=9字)的以标题直接成行
-                # （联合早报等源无简介，重大国际/热点新闻不能因此漏掉）
-                summary = _rich_summary(n)
-                if summary is None:
-                    if len(norm) >= 9:
-                        summary = n["title"]
-                    else:
-                        print(f"[补充跳过] 无简介且标题过短：{n['title'][:30]}...")
-                        continue
-                if len(summary) > NEWS_PER_LINE:
-                    # 优先在最近的中文句号/感叹号/问号处截断
-                    cut = max(
-                        summary[:NEWS_PER_LINE].rfind("。"),
-                        summary[:NEWS_PER_LINE].rfind("！"),
-                        summary[:NEWS_PER_LINE].rfind("？"),
-                    )
-                    if cut > 0:
-                        summary = summary[:cut + 1]
-                    else:
-                        # 找不到句子边界，用标题兜底但保证语义完整
-                        summary = n["title"] + "。"
-                current.append((n["title"], summary))
-                used_pairs.append((norm, summary))
-                used_titles.add(norm)
-                needed -= 1
-            # 同分类不够，从其他分类补充（热点不从国际补充）
+            needed = _fill_from(grouped.get(sec, []), current, needed)
             if needed > 0:
+                # 同分类不够，从其他分类补充（热点不从国际补充）
                 for other_sec in SECTIONS:
+                    if needed <= 0:
+                        break
                     if other_sec == sec:
                         continue
                     if sec == "热点" and other_sec == "国际":
                         continue
-                    for n in grouped.get(other_sec, []):
-                        if needed <= 0:
-                            break
-                        norm = normalize_title(n["title"])
-                        if norm in used_titles:
-                            continue
-                        if any(
-                            _is_same_event(norm, n.get("summary") or n["title"], u_t, u_s)
-                            for u_t, u_s in used_pairs
-                        ):
-                            print(f"[补充跳过] 与已选同主线：{n['title'][:30]}...")
-                            continue
-                        summary = _rich_summary(n)
-                        if summary is None:
-                            if len(norm) >= 9:
-                                summary = n["title"]
-                            else:
-                                print(f"[补充跳过] 无简介且标题过短：{n['title'][:30]}...")
-                                continue
-                        if len(summary) > NEWS_PER_LINE:
-                            # 优先在最近的中文句号/感叹号/问号处截断
-                            cut = max(
-                                summary[:NEWS_PER_LINE].rfind("。"),
-                                summary[:NEWS_PER_LINE].rfind("！"),
-                                summary[:NEWS_PER_LINE].rfind("？"),
-                            )
-                            if cut > 0:
-                                summary = summary[:cut + 1]
-                            else:
-                                # 找不到句子边界，用标题兜底但保证语义完整
-                                summary = n["title"] + "。"
-                        current.append((n["title"], summary))
-                        used_pairs.append((norm, summary))
-                        used_titles.add(norm)
-                        needed -= 1
+                    needed = _fill_from(grouped.get(other_sec, []), current, needed)
             sections[sec] = current
     return sections
+
+
+def _make_fill_summary(n, norm):
+    """为补充条目生成摘要；无可用内容返回 None（宁缺毋滥）。
+
+    - 有实质简介优先；无简介但标题信息完整(>=9字)的以标题直接成行
+      （联合早报等源无简介，重大国际/热点新闻不能因此漏掉）
+    - 超长时在最近的句末标点处截断，找不到句子边界用标题兜底
+    """
+    summary = _rich_summary(n)
+    if summary is None:
+        if len(norm) >= 9:
+            summary = n["title"]
+        else:
+            print(f"[补充跳过] 无简介且标题过短：{n['title'][:30]}...")
+            return None
+    if len(summary) > NEWS_PER_LINE:
+        # 优先在最近的中文句号/感叹号/问号处截断
+        cut = max(
+            summary[:NEWS_PER_LINE].rfind("。"),
+            summary[:NEWS_PER_LINE].rfind("！"),
+            summary[:NEWS_PER_LINE].rfind("？"),
+        )
+        if cut > 0:
+            summary = summary[:cut + 1]
+        else:
+            # 找不到句子边界，用标题兜底但保证语义完整
+            summary = n["title"] + "。"
+    return summary
 
 
 def _reclassify_sections(sections):
@@ -795,8 +777,12 @@ def parse_markdown(text):
                 i += 1
                 continue
             raw = mm.group(1).strip()
-            # 旧格式一行："标题：摘要"
-            if "：" in raw or ":" in raw:
+            # 旧格式一行："**标题**：摘要"（标题本身可能含"："，优先在 ** 闭合后切分）
+            bold_kv = re.match(r"^\*\*(.+?)\*\*\s*[：:]\s*(.+)$", raw)
+            if bold_kv:
+                title = bold_kv.group(1).strip()
+                summary = bold_kv.group(2).strip().rstrip("*").strip()
+            elif "：" in raw or ":" in raw:
                 sep = "：" if "：" in raw else ":"
                 t, _, s = raw.partition(sep)
                 title = t.strip().strip("*")
