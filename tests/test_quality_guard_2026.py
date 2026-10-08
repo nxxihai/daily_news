@@ -221,8 +221,8 @@ class TestBareTitleRendering(unittest.TestCase):
         self.assertIn("**秘鲁宣布与伊朗断绝外交关系**", out)
         # 不出现 "标题：标题" 式的重复
         self.assertNotIn("**秘鲁宣布与伊朗断绝外交关系**：秘鲁宣布与伊朗", out)
-        # 有实质摘要的正常条目保持 "标题：摘要" 格式
-        self.assertIn("：美国国防部称已完成", out)
+        # 有实质摘要的正常条目保持两行格式（要点行 + 介绍行）
+        self.assertIn("美国国防部称已完成", out)
 
 
 class TestRuleSummaryQuality(unittest.TestCase):

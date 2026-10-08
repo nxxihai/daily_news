@@ -233,21 +233,21 @@ def build_prompt(news_items, per_section=None, per_line=None):
 
 【国际】
 1. **一二十字的要点**
-介绍：一句话，补充具体事实（时间/地点/数字/结果）。
+一句话，补充具体事实（时间/地点/数字/结果）。
 2. **一二十字的要点**
-介绍：一句话，补充具体事实。
+一句话，补充具体事实。
 
 【国内】
 1. **一二十字的要点**
-介绍：一句话，补充具体事实。
+一句话，补充具体事实。
 2. **一二十字的要点**
-介绍：一句话，补充具体事实。
+一句话，补充具体事实。
 
 【热点】
 1. **一二十字的要点**
-介绍：一句话，补充具体事实。
+一句话，补充具体事实。
 2. **一二十字的要点**
-介绍：一句话，补充具体事实。"""
+一句话，补充具体事实。"""
 
 
 def _do_request(provider, prompt):
@@ -744,6 +744,7 @@ def sections_to_markdown(sections, per_line=None):
             # 清理介绍
             s = summary.strip()
             s = s.replace("**", "").replace("*", "").strip()
+            s = re.sub(r"^介绍\s*[：:]\s*", "", s).strip()
             # 去掉尾部省略号（中英文省略号、连续句号等变体）
             s = re.sub(r"[…。.]{2,}\s*$", "", s).rstrip("…。.")
             # 修复明显截断：以逗号、顿号结尾的，去掉末尾标点
@@ -807,6 +808,8 @@ def parse_markdown(text):
                 if i + 1 < len(lines) and not re.match(r"^\d+[\.、]", lines[i + 1]):
                     summary = lines[i + 1].strip()
                     i += 1
+            # 剥掉模型可能照抄的"介绍："标签前缀
+            summary = re.sub(r"^介绍\s*[：:]\s*", "", summary).strip()
             if title and summary:
                 items.append((title, summary))
             i += 1
@@ -879,6 +882,11 @@ _MAINLINE_REGIONS = [
     "加拿大", "澳大利亚", "欧盟", "北约", "联合国", "加沙", "吉隆",
     "西藏", "云南", "四川", "河南",
 ]
+# 政要/名人实体：与地区一样可作为"同一主线"的锚点（如"特朗普向马斯克颁奖"无地区词）
+_MAINLINE_PEOPLE = [
+    "特朗普", "拜登", "普京", "泽连斯基", "金正恩", "马克龙", "马斯克",
+    "黄仁勋", "内塔尼亚胡", "哈梅内伊", "莫迪", "石破茂", "李在明",
+]
 _MAINLINE_DOMAINS = {
     "军事": ["打击", "空袭", "轰炸", "爆炸", "袭击", "遇袭", "遭袭", "突袭",
              "夜袭", "炮轰", "狂轰", "再轰", "导弹", "炮击", "开火", "交火",
@@ -888,6 +896,7 @@ _MAINLINE_DOMAINS = {
     "灾害": ["地震", "台风", "洪水", "泥石流", "火灾", "事故", "死伤", "伤亡",
              "遇难", "丧生", "身亡", "受伤", "搜救", "救援", "抢通", "塌方",
              "失联", "被困", "冲毁"],
+    "表彰": ["颁奖", "颁发", "颁授", "奖章", "勋章", "授予", "表彰", "获奖"],
 }
 
 
@@ -897,8 +906,9 @@ def _same_mainline(t1, t2):
     用于收敛同一事件的多个报道节点（如"美军打击伊朗"+"伊朗多地爆炸"），
     避免早报同一主题连续刷屏；不同动作域（军事 vs 外交）则各自保留。
     """
-    regions1 = {r for r in _MAINLINE_REGIONS if r in t1}
-    regions2 = {r for r in _MAINLINE_REGIONS if r in t2}
+    anchors = _MAINLINE_REGIONS + _MAINLINE_PEOPLE
+    regions1 = {r for r in anchors if r in t1}
+    regions2 = {r for r in anchors if r in t2}
     if not (regions1 & regions2):
         return False
     for domain_words in _MAINLINE_DOMAINS.values():
