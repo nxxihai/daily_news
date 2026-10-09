@@ -20,7 +20,7 @@ python run_daily.py
 
 | 文件 | 职责 |
 | --- | --- |
-| `collectors.py` | 采集：新浪新闻、百度热搜、联合早报、天行数据、聚合数据（需 `JUHE_KEY`） |
+| `collectors.py` | 采集：澎湃新闻、中新网 RSS、新浪新闻、微博热搜、百度热搜、联合早报、聚合数据（需 `JUHE_KEY`）、天行数据（末位备用） |
 | `filter.py` | 第一道质量闸：低质/旧闻过滤（娱乐八卦、游戏、体育、个股期货、旧日期） |
 | `summarize.py` | 核心提炼：LLM 筛选重写（失败自动降级到规则版）+ 后处理校验 |
 | `sender.py` | Server酱 推送（`SEND_KEY`） |

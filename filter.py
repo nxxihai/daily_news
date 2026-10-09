@@ -292,16 +292,27 @@ def importance_score(news_item):
 
     # 来源加分：权威媒体优先
     source = news_item.get("source", "")
+    if "澎湃" in source:
+        score += 22  # 澎湃新闻：编辑质量高
+    if "中新网" in source:
+        score += 22  # 中新网：时政/国内权威源
     if "新浪" in source:
         score += 20
     if "早报" in source:
         score += 18  # 联合早报：国际新闻质量高
-    if "天行" in source:
-        score += 15
+    if "微博" in source:
+        score += 12  # 微博热搜：热点时效最快
     if "百度" in source:
         score += 10  # 百度热搜是热点，但非传统要闻
     if "聚合" in source:
         score += 5
+    if "天行" in source:
+        score += 3  # 天行免费版常返回陈年缓存，降为末位备用
+
+    # 微博热搜热度加成（热度值越大越靠前，封顶 30 分）
+    heat = news_item.get("heat", 0)
+    if heat:
+        score += min(heat // 100000, 30)
 
     # 分类基础分
     if cat in ("国际要闻", "国际"):

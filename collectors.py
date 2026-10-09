@@ -11,10 +11,17 @@
 
 import json
 import re
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 BJT = timezone(timedelta(hours=8))  # 北京时间
 
 import requests
+import urllib3
+
+# 本地证书库过期时 _get 会回退 verify=False，关闭对应的警告刷屏
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config import JUHE_KEY, TIANAPI_KEY
 
@@ -24,10 +31,17 @@ UA = (
 )
 
 
-def _get(url, params=None, timeout=12):
-    resp = requests.get(
-        url, params=params, headers={"User-Agent": UA}, timeout=timeout
-    )
+def _get(url, params=None, timeout=12, headers=None):
+    h = {"User-Agent": UA}
+    if headers:
+        h.update(headers)
+    try:
+        resp = requests.get(url, params=params, headers=h, timeout=timeout)
+    except requests.exceptions.SSLError:
+        # 本地证书库过期时回退不校验证书（GitHub Actions 等云端环境不会走到这）
+        resp = requests.get(
+            url, params=params, headers=h, timeout=timeout, verify=False
+        )
     resp.raise_for_status()
     return resp
 
@@ -359,17 +373,165 @@ def collect_zaobao():
     return news
 
 
+# ---------- 微博热搜（免 key，热点栏主力，时效最快） ----------
+# 接口：微博移动端侧边栏热搜，返回实时热词+热度值，无需登录
+WEIBO_HOT_URL = "https://weibo.com/ajax/side/hotSearch"
+
+
+def collect_weibo_hot():
+    """抓取微博实时热搜，全部标为「热点」，带热度值供重要性排序。"""
+    resp = _get(
+        WEIBO_HOT_URL,
+        headers={"Referer": "https://weibo.com/",
+                 "X-Requested-With": "XMLHttpRequest"},
+    )
+    data = resp.json().get("data", {})
+    news = []
+    for item in data.get("realtime", [])[:40]:
+        # note 是展示标题（可能带 #话题#），word 是搜索词；优先 note
+        title = str(item.get("note") or item.get("word", "")).strip().strip("#")
+        if not title or item.get("is_ad"):
+            continue
+        news.append(
+            {
+                "title": title,
+                "summary": "",
+                "source": "微博热搜",
+                "category": "热点",
+                "heat": int(item.get("num", 0) or 0),  # 热度值，供 filter 排序参考
+            }
+        )
+    return news
+
+
+# ---------- 澎湃新闻（免 key，编辑质量高，详情页 meta 取简介） ----------
+# 首页右侧聚合接口：热榜/精选/财经快讯，含时间戳；频道接口有反爬不可用
+THEPAPER_INDEX_URL = "https://api.thepaper.cn/contentapi/wwwIndex/rightSidebar"
+THEPAPER_DETAIL_URL = "https://www.thepaper.cn/newsDetail_forward_{}"
+_THEPAPER_META_RE = re.compile(
+    r'<meta[^>]+name="description"[^>]+content="([^"]+)"'
+)
+
+
+def _thepaper_summary(cont_id):
+    """抓详情页 meta description 作简介，失败返回空串。"""
+    try:
+        r = _get(THEPAPER_DETAIL_URL.format(cont_id), timeout=8)
+        r.encoding = "utf-8"
+        m = _THEPAPER_META_RE.search(r.text)
+        if m:
+            return re.sub(r"\s+", " ", m.group(1)).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _thepaper_category(title):
+    """澎湃无分类字段，复用关键词粗分。"""
+    return _tianapi_category(title)
+
+
+def collect_thepaper():
+    """澎湃首页聚合（热榜+精选+快讯），并发抓详情页简介。"""
+    resp = _get(THEPAPER_INDEX_URL)
+    data = resp.json().get("data", {})
+    pools = (
+        data.get("hotNews", [])
+        + data.get("editorHandpicked", [])
+        + data.get("financialInformationNews", [])
+    )
+    items, seen = [], set()
+    for it in pools:
+        title = str(it.get("name", "")).strip()
+        cid = str(it.get("contId", ""))
+        if not title or cid in seen:
+            continue
+        seen.add(cid)
+        items.append(
+            {
+                "title": title,
+                "summary": "",
+                "source": "澎湃新闻",
+                "category": _thepaper_category(title),
+                "ctime": str(int(it.get("pubTimeLong", 0) / 1000) or ""),
+                "_cid": cid,
+            }
+        )
+    items = items[:25]
+    # 并发抓详情页简介（本地证书问题，cloud/Actions 正常；失败则留空，靠跨源借用兜底）
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        summaries = list(pool.map(lambda n: _thepaper_summary(n["_cid"]), items))
+    for n, s in zip(items, summaries):
+        n["summary"] = s
+        n.pop("_cid", None)
+    return items
+
+
+# ---------- 中国新闻网即时 RSS（免 key，时政/国内/社会权威源，带简介） ----------
+CHINANEWS_RSS_URL = "https://www.chinanews.com.cn/rss/scroll-news.xml"
+
+# RSS 链接路径 → 早报分类；不在表内的频道（生活/健康/娱乐等）跳过
+_CHINANEWS_CAT_MAP = {
+    "/gj/": "国际要闻",
+    "/gn/": "国内",
+    "/sh/": "社会",
+    "/cj/": "财经要闻",
+    "/mil/": "国际",  # 军事归国际
+}
+
+
+def collect_chinanews():
+    """中新网即时新闻 RSS：标题+简介+发布时间，按链接路径分类。"""
+    resp = _get(CHINANEWS_RSS_URL)
+    resp.encoding = "utf-8"
+    root = ET.fromstring(resp.text)
+    news = []
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        desc = (item.findtext("description") or "").strip().strip("　 ")
+        if not title:
+            continue
+        # 按链接路径确定分类，低价值频道（生活/健康/娱乐/体育）跳过
+        cat = next(
+            (c for path, c in _CHINANEWS_CAT_MAP.items() if path in link), None
+        )
+        if not cat:
+            continue
+        # pubDate: "Fri, 9 Oct 2026 08:19:06 +0800" → 时间戳
+        ctime = ""
+        pub = item.findtext("pubDate") or ""
+        try:
+            ctime = str(int(parsedate_to_datetime(pub).timestamp()))
+        except Exception:
+            pass
+        news.append(
+            {
+                "title": title,
+                "summary": desc,
+                "source": "中新网",
+                "category": cat,
+                "ctime": ctime,
+            }
+        )
+    return news
+
+
 # ---------- 汇总 ----------
 
 def collect_all():
     """依次采集所有启用的源，合并返回。单个源失败不影响整体。"""
     all_news = []
+    # 排序即优先级：澎湃/中新网质量最高放前面；天行免费版常返回陈年缓存，降到最后备用
     collectors = [
+        ("澎湃新闻", collect_thepaper),
+        ("中新网", collect_chinanews),
         ("新浪新闻", collect_sina),
+        ("微博热搜", collect_weibo_hot),
         ("百度热搜", collect_baidu_hot),
         ("联合早报", collect_zaobao),
-        ("天行数据", collect_tianapi),
         ("聚合数据", collect_juhe),
+        ("天行数据", collect_tianapi),
     ]
     for name, func in collectors:
         try:

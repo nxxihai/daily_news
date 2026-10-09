@@ -84,6 +84,9 @@ TITLE_KEYWORDS = {
         # 国际知名人物（不应归国内）
         "比尔·盖茨", "盖茨", "马斯克", "巴菲特", "贝索斯", "扎克伯格",
         "诺贝尔", "奥斯卡", "格莱美",
+        # 简写/组合词（标题常用简称，不含全称时也能识别）
+        "中美", "中俄", "中日", "中韩", "外交部", "俄军", "乌军",
+        "俄乌", "俄方", "乌方", "俄导弹", "北约",
     ],
     "国内": [
         "中国", "北京", "上海", "深圳", "广州", "杭州", "成都", "武汉",
@@ -115,6 +118,9 @@ TITLE_KEYWORDS = {
         "法拍", "别墅", "毛坯", "贷款",
         "一日游", "乡村", "孩子", "作业", "挑战赛",
         "蛋糕店", "店主", "回应",
+        # 猎奇/社会事件（防止只占"国家名"一条国际词的奇闻混入国际栏）
+        "摔角", "裁判", "婚礼", "新郎", "新娘", "可乐", "雪碧",
+        "病房", "霉菌", "救护车", "门诊", "建卡", "老人",
     ],
 }
 
@@ -123,10 +129,12 @@ def _classify_by_title(title):
     """根据标题关键词推断分类，用于规则版兜底。返回国际/国内/热点/None。"""
     scores = {"国际": 0, "国内": 0, "热点": 0}
     for sec, keywords in TITLE_KEYWORDS.items():
-        for kw in keywords:
+        for kw in set(keywords):  # 词表有重复词，去重后计分避免虚高
             if kw in title:
                 scores[sec] += 1
-    best_sec = max(scores, key=scores.get)
+    # 平局时热点优先于国内/国际：命中社会事件词的外国奇闻不应占国际栏
+    priority = {"热点": 2, "国内": 1, "国际": 0}
+    best_sec = max(scores, key=lambda s: (scores[s], priority[s]))
     if scores[best_sec] == 0:
         return None
     return best_sec
@@ -206,6 +214,8 @@ def build_prompt(news_items, per_section=None, per_line=None):
 - 优先选择标注日期为今天（{today_iso}）的新闻，其次是昨天（{yesterday_iso}）的。
 - 严格排除日期在3天以前的新闻（{cutoff_iso}及更早），即使内容重要也不选。
 - 如果标题里提到的具体事件日期是几个月前的（如"5月18日"、"6月26日"），这条是旧闻，必须排除。
+- 排除历史回顾类内容：事件本身发生在数月/数年前，如今只是"披露/首次公开/纪录片/影像曝光"
+  （如"央视披露多年前营救细节"），不是当日新闻，一律不选。
 
 【写作要求】
 1. 严格排除以下类型（即使标题很吸引眼球）：
@@ -517,7 +527,7 @@ def _fill_missing_sections(sections, news_items, per_section=None):
             ):
                 print(f"[补充跳过] 与已选同主线：{n['title'][:30]}...")
                 continue
-            summary = _make_fill_summary(n, norm)
+            summary = _make_fill_summary(n, norm, news_items)
             if summary is None:
                 continue
             current.append((n["title"], summary))
@@ -546,14 +556,33 @@ def _fill_missing_sections(sections, news_items, per_section=None):
     return sections
 
 
-def _make_fill_summary(n, norm):
+def _borrow_summary(n, norm, news_items):
+    """本条无可用简介时，从其他来源找同一事件的报道，借用其简介。
+
+    联合早报/微博热搜/聚合等源不带简介，但同一事件常被新浪/中新网/澎湃
+    等带简介的源报道过，借用后可避免"裸标题"成行。找不到返回 None。
+    """
+    for m in news_items:
+        if m is n or not m.get("summary"):
+            continue
+        if _is_same_event(norm, n.get("summary") or "", normalize_title(m["title"]), m["summary"]):
+            s = _rich_summary(m)
+            if s:
+                return s
+    return None
+
+
+def _make_fill_summary(n, norm, news_items=None):
     """为补充条目生成摘要；无可用内容返回 None（宁缺毋滥）。
 
-    - 有实质简介优先；无简介但标题信息完整(>=9字)的以标题直接成行
+    - 有实质简介优先；无简介时先尝试跨源借用同事件简介，
+      再退回标题信息完整(>=9字)的以标题直接成行
       （联合早报等源无简介，重大国际/热点新闻不能因此漏掉）
     - 超长时在最近的句末标点处截断，找不到句子边界用标题兜底
     """
     summary = _rich_summary(n)
+    if summary is None and news_items:
+        summary = _borrow_summary(n, norm, news_items)
     if summary is None:
         if len(norm) >= 9:
             summary = n["title"]
@@ -617,6 +646,9 @@ _POST_FILTER_BAN = [
     "基金", "基民", "盈亏", "投资者占比", "中期报告",
     # 股市/投资（补充）
     "科创", "指数", "收益", "跑赢", "跑输",
+    # 公司资本运作/外国芯片公司动态（非公共要闻）
+    "拟投资", "战略投资", "融资", "收购", "并购", "入股",
+    "英伟达", "NVIDIA", "超威半导体",
 ]
 
 
