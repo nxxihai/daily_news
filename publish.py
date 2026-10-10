@@ -118,6 +118,7 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
   padding:7px 13px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer}
 .pbtn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
 .pbtn:active{transform:translateY(1px)}
+.pbtn:disabled{opacity:.45; cursor:not-allowed}
 .pstat{margin-left:auto; color:var(--muted); font-size:12px; white-space:nowrap}
 .item.playing{background:rgba(37,99,235,.10); border-radius:12px; padding-left:10px;
   padding-right:10px; margin:0 -10px}
@@ -142,9 +143,23 @@ PLAYER_HTML = """
 </div>
 <script>
 (function () {
-  var synth = window.speechSynthesis;
   var bar = document.getElementById('player');
-  if (!synth || typeof SpeechSynthesisUtterance === 'undefined' || !bar) return;
+  var playBtn = document.getElementById('pplay');
+  var stopBtn = document.getElementById('pstop');
+  var rateSel = document.getElementById('prate');
+  var stat = document.getElementById('pstat');
+  if (!bar || !playBtn || !stopBtn || !rateSel || !stat) return;
+
+  var synth = window.speechSynthesis;
+  if (!synth || typeof SpeechSynthesisUtterance === 'undefined') {
+    // 微信内置浏览器等环境没有语音合成：显示禁用态并说明原因，不静默隐藏
+    bar.hidden = false;
+    playBtn.disabled = true;
+    stopBtn.disabled = true;
+    rateSel.disabled = true;
+    stat.textContent = '当前浏览器不支持朗读，请用手机自带浏览器打开';
+    return;
+  }
 
   var items = [];
   Array.prototype.forEach.call(document.querySelectorAll('section.sec'), function (sec) {
@@ -163,10 +178,6 @@ PLAYER_HTML = """
   if (!items.length) return;
   bar.hidden = false;
 
-  var playBtn = document.getElementById('pplay');
-  var stopBtn = document.getElementById('pstop');
-  var rateSel = document.getElementById('prate');
-  var stat = document.getElementById('pstat');
   var voice = null, queue = [], qi = 0, idx = -1, state = 'idle';
 
   function pickVoice() {

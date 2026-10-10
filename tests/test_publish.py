@@ -95,6 +95,9 @@ class ListenTest(unittest.TestCase):
         # f-string 不会破坏 JS 里的反斜杠正则
         self.assertIn(r"/\d+\s*条/g", page)
         self.assertIn('id="pplay"', page)
+        # 微信内置浏览器等不支持语音合成时：显示禁用态 + 提示，而不是静默隐藏
+        self.assertIn("当前浏览器不支持朗读，请用手机自带浏览器打开", page)
+        self.assertIn(".pbtn:disabled{opacity:.45", page)
 
     def test_player_sits_below_title_before_sections(self):
         """朗读条要跟在标题下面，且在新闻卡片之前。"""
