@@ -20,6 +20,7 @@ import html
 import os
 import re
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -32,6 +33,7 @@ PAGE_REL = "docs/index.html"                      # 相对仓库根目录（git 
 PAGE_FILE = BASE_DIR / "docs" / "index.html"
 
 GIT_TIMEOUT = 60                                  # 单条 git 命令超时（秒），防止计划任务卡死
+PUSH_RETRY_DELAY = 5                              # git push 失败后的重试等待（秒）
 BOT_NAME = "github-actions[bot]"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -301,6 +303,23 @@ def _current_branch():
     return "main"
 
 
+def _push(ref, branch):
+    """推送 ref 到 origin/<branch>，失败等几秒再试一次。
+
+    实测 GitHub 连接偶发抖动（本地代理/加速器切换时），一次失败就放弃会导致
+    当天的页面漏发，所以给第二次机会。
+    """
+    last = None
+    for attempt in range(2):
+        r = _git(["push", "origin", f"{ref}:refs/heads/{branch}"])
+        if r is not None and r.returncode == 0:
+            return True, ""
+        last = r
+        if attempt == 0:
+            time.sleep(PUSH_RETRY_DELAY)
+    return False, _err(last)
+
+
 def _commit_on_head(paths, message, branch):
     """常规路径：在当前 HEAD 上提交（云端与「本地不落后」时走这里）。"""
     if _git(["add", "--", *paths]) is None:
@@ -311,9 +330,9 @@ def _commit_on_head(paths, message, branch):
     commit = _git([*_ident_args(), "commit", "-m", message, "--", *paths])
     if commit is None or commit.returncode != 0:
         return False, f"git commit 失败：{_err(commit)}"
-    push = _git(["push", "origin", f"HEAD:{branch}"])
-    if push is None or push.returncode != 0:
-        return False, f"git push 失败：{_err(push)}"
+    ok, err = _push("HEAD", branch)
+    if not ok:
+        return False, f"git push 失败（已重试）：{err}"
     return True, f"已提交并推送到 origin/{branch}"
 
 
@@ -359,9 +378,9 @@ def _commit_on_remote(paths, message, branch):
         if commit is None or commit.returncode != 0:
             return False, f"git commit-tree 失败：{_err(commit)}"
 
-        push = _git(["push", "origin", f"{commit.stdout.strip()}:refs/heads/{branch}"])
-        if push is None or push.returncode != 0:
-            return False, f"git push 失败：{_err(push)}"
+        ok, err = _push(commit.stdout.strip(), branch)
+        if not ok:
+            return False, f"git push 失败（已重试）：{err}"
     finally:
         index_file.unlink(missing_ok=True)
         Path(f"{index_file}.lock").unlink(missing_ok=True)
@@ -408,7 +427,9 @@ def publish_page(title, markdown, commit=True, generated_at=None):
     if not commit:
         return True, f"dry-run：仅生成 {PAGE_REL}，未提交"
     ok, msg = git_publish()
-    return ok, f"{msg} → 网页地址 {SITE_URL}"
+    if ok:
+        return True, f"{msg} → 网页地址 {SITE_URL}"
+    return False, f"网页未发布：{msg}（本次推送退回纯文字版）"
 
 
 if __name__ == "__main__":
