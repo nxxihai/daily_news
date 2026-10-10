@@ -176,7 +176,8 @@ def collect_sina():
     ]
     for lid, default_cat, num in channels:
         try:
-            resp = requests.get(
+            # 走 _get：本地证书/代理导致的 SSL 失败会自动回退 verify=False
+            resp = _get(
                 SINA_ROLL_URL,
                 params={
                     "pageid": "153",

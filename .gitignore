@@ -8,3 +8,10 @@ venv/
 
 # 本机临时文件
 *.log
+
+# 本地私密配置（存放各种 key，绝不提交；模板见 local_config.example.py）
+local_config.py
+
+# 本机调试脚本 / 截图，不随仓库发布
+_test_zaobao.py
+notification.png
