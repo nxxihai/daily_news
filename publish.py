@@ -108,12 +108,12 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
 }
 .foot{margin:26px 0 0; color:var(--muted); font-size:12.5px; text-align:center; line-height:2}
 .foot a{color:var(--muted); text-decoration:underline}
-/* 听新闻：固定底栏 + 当前条目高亮（不支持语音合成的浏览器不显示该栏） */
-body{padding-bottom:78px}
-.player{position:fixed; left:0; right:0; bottom:0; z-index:9; background:var(--card);
-  border-top:1px solid var(--line); box-shadow:0 -8px 24px -18px rgba(16,24,40,.55)}
-.player-in{max-width:760px; margin:0 auto; padding:9px 16px; display:flex; align-items:center;
-  gap:8px; flex-wrap:wrap}
+/* 听新闻：标题下方紧跟的朗读条（吸顶，滚动时也在）+ 当前条目高亮
+   不支持语音合成的浏览器会自动隐藏该栏 */
+.player{position:sticky; top:0; z-index:9; margin:0 0 18px;
+  background:var(--card); border:1px solid var(--line); border-radius:14px;
+  box-shadow:var(--shadow)}
+.player-in{padding:8px 12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .pbtn{border:1px solid var(--line); background:transparent; color:var(--text); border-radius:999px;
   padding:7px 13px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer}
 .pbtn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
@@ -400,13 +400,13 @@ def render_html(title, markdown, generated_at=None):
     <h1 class="date">{html.escape(date_text)}</h1>
     <p class="meta">更新于 {stamp}（北京时间） · AI 提炼自公开新闻源</p>
   </header>
+{PLAYER_HTML}
   {body}
   <footer class="foot">
     <p>本页每天推送后自动更新，永远是最新一期。</p>
     {foot_links}
   </footer>
 </div>
-{PLAYER_HTML}
 </body>
 </html>
 """

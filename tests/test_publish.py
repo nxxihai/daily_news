@@ -96,6 +96,14 @@ class ListenTest(unittest.TestCase):
         self.assertIn(r"/\d+\s*条/g", page)
         self.assertIn('id="pplay"', page)
 
+    def test_player_sits_below_title_before_sections(self):
+        """朗读条要跟在标题下面，且在新闻卡片之前。"""
+        page = render_html("每日新闻早报 2026-10-10", SAMPLE)
+        self.assertLess(page.index('id="player"'), page.index('<section class="sec"'))
+        self.assertLess(page.index("</header>"), page.index('id="player"'))
+        self.assertIn("position:sticky", page)
+        self.assertNotIn("padding-bottom:78px", page)
+
 
 if __name__ == "__main__":
     unittest.main()
