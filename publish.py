@@ -91,6 +91,9 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
 .list{list-style:none; margin:0; padding:0}
 .item{display:flex; gap:11px; padding:13px 0; border-top:1px solid var(--line)}
 .item:first-child{border-top:0}
+.item.brief{padding:11px 0}
+.item.brief .num{opacity:.55}
+.item.brief .head{font-size:15.5px; font-weight:600}
 .num{
   flex:0 0 24px; height:24px; margin-top:4px; border-radius:8px;
   background:rgba(128,128,128,.14); color:var(--sec,var(--accent));
@@ -170,9 +173,14 @@ def _render_sections(sections):
     blocks = []
     for sec in sections:
         name = sec["name"] or "要闻"
+        # 有介绍的排在前面：页面从上到下是"带背景的重点 → 一句话简讯"，
+        # 避免"有介绍/没介绍"交错造成的参差观感
+        items = [it for it in sec["items"] if it["desc"]] + [
+            it for it in sec["items"] if not it["desc"]
+        ]
         lis = []
         num = 0
-        for it in sec["items"]:
+        for it in items:
             head = it["head"]
             if head:
                 num += 1
@@ -182,8 +190,10 @@ def _render_sections(sections):
                 badge = ""
                 head_html = ""
             desc_html = f'<p class="desc">{_inline(it["desc"])}</p>' if it["desc"] else ""
+            # 无介绍的条目用 brief 样式：视觉上明确是"一句话简讯"，不是缺内容
+            cls = "item" if it["desc"] else "item brief"
             lis.append(
-                f'<li class="item">{badge}<div class="bd">{head_html}{desc_html}</div></li>'
+                f'<li class="{cls}">{badge}<div class="bd">{head_html}{desc_html}</div></li>'
             )
         blocks.append(
             f'<section class="sec" style="--sec:{SECTION_THEME.get(name, "#2563eb")}">'
