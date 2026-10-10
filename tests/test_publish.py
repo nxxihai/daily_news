@@ -67,8 +67,9 @@ class RenderHtmlTest(unittest.TestCase):
             "每日新闻早报 <b>2026-10-10</b>",
             "【国内】\n\n1. **<script>alert(1)</script>**\n介绍 & 内容\n",
         )
-        self.assertNotIn("<script>", page)
-        self.assertIn("&lt;script&gt;", page)
+        # 新闻内容里的脚本必须被转义（页面自身的听新闻脚本是可信的）
+        self.assertNotIn("<script>alert(1)</script>", page)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertIn("介绍 &amp; 内容", page)
 
     def test_empty_markdown_shows_notice(self):
@@ -76,11 +77,24 @@ class RenderHtmlTest(unittest.TestCase):
         self.assertIn("本期内容尚未生成", page)
 
     def test_self_contained(self):
-        """页面必须自包含：不引用任何外部 css/js/图片，微信内置浏览器也能秒开。"""
+        """页面必须自包含：除内置的听新闻脚本外，不引用任何外部 css/js/图片。"""
         page = render_html("每日新闻早报 2026-10-10", SAMPLE)
         self.assertNotIn("<link ", page)
-        self.assertNotIn("<script", page)
         self.assertIn("<style>", page)
+        self.assertNotIn("src=", page)
+
+
+class ListenTest(unittest.TestCase):
+    """听新闻（浏览器语音合成）：底栏、脚本、片段切分的存在性检查。"""
+
+    def test_player_hidden_by_default_and_script_present(self):
+        page = render_html("每日新闻早报 2026-10-10", SAMPLE)
+        self.assertIn('<div class="player" id="player" hidden>', page)
+        self.assertIn("SpeechSynthesisUtterance", page)
+        self.assertIn("speechSynthesis", page)
+        # f-string 不会破坏 JS 里的反斜杠正则
+        self.assertIn(r"/\d+\s*条/g", page)
+        self.assertIn('id="pplay"', page)
 
 
 if __name__ == "__main__":

@@ -108,6 +108,159 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
 }
 .foot{margin:26px 0 0; color:var(--muted); font-size:12.5px; text-align:center; line-height:2}
 .foot a{color:var(--muted); text-decoration:underline}
+/* 听新闻：固定底栏 + 当前条目高亮（不支持语音合成的浏览器不显示该栏） */
+body{padding-bottom:78px}
+.player{position:fixed; left:0; right:0; bottom:0; z-index:9; background:var(--card);
+  border-top:1px solid var(--line); box-shadow:0 -8px 24px -18px rgba(16,24,40,.55)}
+.player-in{max-width:760px; margin:0 auto; padding:9px 16px; display:flex; align-items:center;
+  gap:8px; flex-wrap:wrap}
+.pbtn{border:1px solid var(--line); background:transparent; color:var(--text); border-radius:999px;
+  padding:7px 13px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer}
+.pbtn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+.pbtn:active{transform:translateY(1px)}
+.pstat{margin-left:auto; color:var(--muted); font-size:12px; white-space:nowrap}
+.item.playing{background:rgba(37,99,235,.10); border-radius:12px; padding-left:10px;
+  padding-right:10px; margin:0 -10px}
+.item.playing .head{color:var(--accent)}
+"""
+
+# 听新闻：浏览器内置语音合成（免费、无需 API/音频文件）。
+# 单独放成普通字符串，避免与 HTML 模板的 f-string 花括号冲突。
+PLAYER_HTML = """
+<div class="player" id="player" hidden>
+  <div class="player-in">
+    <button class="pbtn primary" id="pplay" type="button">▶ 听新闻</button>
+    <button class="pbtn" id="pstop" type="button">停止</button>
+    <select class="pbtn" id="prate" aria-label="语速">
+      <option value="0.9">0.9×</option>
+      <option value="1" selected>1.0×</option>
+      <option value="1.15">1.15×</option>
+      <option value="1.3">1.3×</option>
+    </select>
+    <span class="pstat" id="pstat"></span>
+  </div>
+</div>
+<script>
+(function () {
+  var synth = window.speechSynthesis;
+  var bar = document.getElementById('player');
+  if (!synth || typeof SpeechSynthesisUtterance === 'undefined' || !bar) return;
+
+  var items = [];
+  Array.prototype.forEach.call(document.querySelectorAll('section.sec'), function (sec) {
+    var sh = sec.querySelector('.sec-head');
+    var name = sh ? sh.textContent.replace(/\\d+\\s*条/g, '').trim() : '';
+    Array.prototype.forEach.call(sec.querySelectorAll('li.item'), function (li, i) {
+      var text = (li.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (!text) return;
+      var head = li.querySelector('.head');
+      var desc = li.querySelector('.desc');
+      var spoken = (head ? head.textContent : '') + (desc ? '。' + desc.textContent : '');
+      spoken = (spoken || text).replace(/\\s+/g, ' ').trim();
+      items.push({ el: li, text: (i === 0 && name ? name + '。' : '') + spoken });
+    });
+  });
+  if (!items.length) return;
+  bar.hidden = false;
+
+  var playBtn = document.getElementById('pplay');
+  var stopBtn = document.getElementById('pstop');
+  var rateSel = document.getElementById('prate');
+  var stat = document.getElementById('pstat');
+  var voice = null, queue = [], qi = 0, idx = -1, state = 'idle';
+
+  function pickVoice() {
+    var all = synth.getVoices() || [];
+    var zh = all.filter(function (v) {
+      return /zh|Chinese/i.test(v.lang) || /中文|Xiaoxiao|Xiaoyi|Yunxi|Huihui|Ting-Ting/i.test(v.name);
+    });
+    var natural = zh.filter(function (v) {
+      return /Natural|Online|Xiaoxiao|Xiaoyi|Yunxi/i.test(v.name);
+    });
+    voice = natural[0] || zh[0] || null;
+  }
+  pickVoice();
+  if (typeof synth.onvoiceschanged !== 'undefined') { synth.onvoiceschanged = pickVoice; }
+
+  function chunk(text) {
+    var out = [], buf = '', MAX = 70, ends = '。！？!?；;';
+    for (var i = 0; i < text.length; i++) {
+      buf += text.charAt(i);
+      if (buf.length >= MAX || ends.indexOf(text.charAt(i)) >= 0) { out.push(buf); buf = ''; }
+    }
+    if (buf) { out.push(buf); }
+    return out;
+  }
+
+  function clearHighlight() {
+    for (var i = 0; i < items.length; i++) { items[i].el.classList.remove('playing'); }
+  }
+
+  function speakNext() {
+    if (qi >= queue.length) { next(); return; }
+    var u = new SpeechSynthesisUtterance(queue[qi++]);
+    if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = 'zh-CN'; }
+    u.rate = parseFloat(rateSel.value) || 1;
+    u.onend = function () { if (state === 'playing') { speakNext(); } };
+    u.onerror = function () { if (state === 'playing') { speakNext(); } };
+    synth.speak(u);
+  }
+
+  function next() {
+    idx += 1;
+    if (idx >= items.length) { stop(); stat.textContent = '已读完'; return; }
+    clearHighlight();
+    var it = items[idx];
+    it.el.classList.add('playing');
+    if (it.el.scrollIntoView) { it.el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    stat.textContent = '朗读中 ' + (idx + 1) + '/' + items.length;
+    queue = chunk(it.text);
+    qi = 0;
+    speakNext();
+  }
+
+  function start(fromIndex) {
+    if (!voice) { pickVoice(); }
+    state = 'playing';
+    playBtn.textContent = '⏸ 暂停';
+    idx = fromIndex - 1;
+    synth.cancel();
+    setTimeout(next, 60);   // cancel 后立刻 speak，部分 Chrome 会吞掉
+  }
+
+  function stop() {
+    state = 'idle';
+    synth.cancel();
+    clearHighlight();
+    playBtn.textContent = '▶ 听新闻';
+    if (stat.textContent.indexOf('已读完') !== 0) { stat.textContent = ''; }
+  }
+
+  playBtn.addEventListener('click', function () {
+    if (state === 'playing') {
+      state = 'paused';
+      synth.pause();
+      playBtn.textContent = '▶ 继续';
+      stat.textContent = '已暂停';
+    } else if (state === 'paused') {
+      state = 'playing';
+      synth.resume();
+      playBtn.textContent = '⏸ 暂停';
+      if (idx >= 0) { stat.textContent = '朗读中 ' + (idx + 1) + '/' + items.length; }
+    } else {
+      start(0);
+    }
+  });
+
+  stopBtn.addEventListener('click', stop);
+
+  rateSel.addEventListener('change', function () {
+    if (state === 'playing' || state === 'paused') { start(Math.max(idx, 0)); }
+  });
+
+  window.addEventListener('pagehide', function () { synth.cancel(); });
+})();
+</script>
 """
 
 
@@ -253,6 +406,7 @@ def render_html(title, markdown, generated_at=None):
     {foot_links}
   </footer>
 </div>
+{PLAYER_HTML}
 </body>
 </html>
 """
