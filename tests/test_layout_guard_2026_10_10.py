@@ -39,10 +39,22 @@ class ClassifyTest(unittest.TestCase):
             "国际",
         )
 
+    def test_foreign_controversy_is_international(self):
+        """热点侧命中"争议+引发"两个通用词，仍应判国际。"""
+        self.assertEqual(
+            _classify_by_title("美国直播枪决计划引发跨党派强烈争议"), "国际"
+        )
+
     def test_domestic_accident_stays_hotspot(self):
         self.assertEqual(
             _classify_by_title("湖北烟花店爆燃12人死亡 调查报告指顾客违规试放引发"),
             "热点",
+        )
+
+    def test_foreign_social_oddity_stays_hotspot(self):
+        """带国名的社会奇闻（热点词不是通用词）不该被挪进国际栏。"""
+        self.assertEqual(
+            _classify_by_title("美国一男子婚礼上新郎被自家狗咬伤"), "热点"
         )
 
 

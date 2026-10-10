@@ -167,11 +167,13 @@ _WEAK_HOTSPOT_WORDS = [
 def _classify_by_title(title):
     """根据标题关键词推断分类，用于规则版兜底。返回国际/国内/热点/None。
 
-    平局规则：
-    1. 默认热点优先于国内/国际：只带一个国名的社会奇闻不该占要闻栏。
-    2. 例外（国际 vs 热点 同分，且没有更高分的分类）：标题含明确外国实体，
-       且热点侧只命中"通用词"（违规/回应/地震/爆炸…）时仍判为国际——
-       例如"伊朗革命卫队：将不限于在霍尔木兹海峡打击违规船只""巴拿马地震"。
+    分类规则：
+    1. 默认按命中词数比大小；平局时热点优先于国内/国际：只带一个国名的社会
+       奇闻不该占要闻栏（"美国一男子婚礼上新郎被狗咬"→热点）。
+    2. 例外：标题含明确外国实体，且热点侧只命中"通用词"（违规/争议/引发/地震/
+       爆炸…）时判为国际——如"伊朗革命卫队…打击违规船只""美国直播枪决计划
+       引发强烈争议""巴拿马发生7.6级强震"。国内词更多时不适用（避免把国内
+       口径的新闻挪走）。
     """
     hits = {
         sec: [kw for kw in set(keywords) if kw in title]  # 词表有重复词，去重后计分
@@ -183,9 +185,11 @@ def _classify_by_title(title):
     if scores[best_sec] == 0:
         return None
     if (
-        scores["国际"] == scores["热点"] == scores[best_sec]
-        and any(kw in title for kw in _FOREIGN_ANCHORS)
+        scores["国际"] > 0
+        and scores["国内"] <= scores["国际"]
+        and hits["热点"]
         and all(kw in _WEAK_HOTSPOT_WORDS for kw in hits["热点"])
+        and any(kw in title for kw in _FOREIGN_ANCHORS)
     ):
         return "国际"
     return best_sec
