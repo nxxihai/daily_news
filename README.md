@@ -1,16 +1,17 @@
 # 每日新闻早报
 
-每天定时采集多家新闻源，经「质量过滤 → AI 提炼/规则兜底 → 后处理校验」后推送到微信（Server酱）。
+每天定时采集多家新闻源，经「质量过滤 → AI 提炼/规则兜底 → 后处理校验」后：
+生成网页版（GitHub Pages，见 <https://nxxihai.github.io/daily_news/>）并推送到微信（Server酱）。
 
 ## 快速使用
 
 ```bash
 pip install -r requirements.txt
 
-# 试跑（不推送，仅打印成稿）
+# 试跑（不推送，仅打印成稿；同时生成本地 docs/index.html 供预览）
 python run_daily.py --dry-run
 
-# 正常推送
+# 正常推送：发网页版 + 微信推送
 python run_daily.py
 ```
 
@@ -23,11 +24,47 @@ python run_daily.py
 | `collectors.py` | 采集：澎湃新闻、中新网 RSS、新浪新闻、微博热搜、百度热搜、联合早报、聚合数据（需 `JUHE_KEY`）、天行数据（末位备用） |
 | `filter.py` | 第一道质量闸：低质/旧闻过滤（娱乐八卦、游戏、体育、个股期货、旧日期） |
 | `summarize.py` | 核心提炼：LLM 筛选重写（失败自动降级到规则版）+ 后处理校验 |
-| `sender.py` | Server酱 推送（`SEND_KEY`） |
+| `publish.py` | 网页版：markdown → HTML（`docs/index.html`）→ git 提交推送，GitHub Pages 自动发布 |
+| `sender.py` | Server酱 推送（`SEND_KEY`）+ PushPlus 备用 |
 | `run_daily.py` | 主流程编排 + Windows 计划任务入口 |
 | `setup_schedule.py` | 注册每日 08:00 计划任务 |
+| `docs/index.html` | 网页版首页（脚本每天覆盖，永远是最新一期） |
 | `tests/` | 回归测试（`python -m unittest discover -s tests -v`） |
-| `config.py` | LLM provider / 阈值 / 标题等配置 |
+| `config.py` | LLM provider / 阈值 / 网页地址 `SITE_URL`（**不存放任何 key**） |
+| `local_config.py` | 本地私密 key（已在 `.gitignore`，不提交）；模板见 `local_config.example.py` |
+
+## 网页版（GitHub Pages）
+
+每次运行 `run_daily.py` 都会：
+
+1. 把当天 markdown 渲染成单文件 HTML（CSS 内联、无外链、适配微信内置浏览器、深色模式）
+2. 覆盖写入 `docs/index.html` 并提交推送到仓库（提交信息 `docs: 更新早报网页 YYYY-MM-DD`）
+3. GitHub Pages 自动发布 → 固定地址 <https://nxxihai.github.io/daily_news/>（永远是最新一期）
+4. 微信推送的**正文第一行**即为这个网页链接，方便点开看排版版
+
+一次性设置（只需做一次）：仓库 **Settings → Pages → Source** 选
+`Deploy from a branch`，分支 **main**、目录 **/docs**，保存后等约 1 分钟生效。
+地址想改就改 `config.py` 里的 `SITE_URL`（同时要跟 Pages 地址一致）。
+
+发布失败不会影响早报：任何一步出错都会打印原因并**降级成纯文字推送**（不附链接，避免点到旧页面）。
+本地仓库长期没 `git pull`（早报机器人一直在提交）时，脚本会基于远端最新提交生成一个只改页面的
+提交再推送，全程不动本地分支和工作区，所以本地计划任务也不会因为"落后"而推不上去。
+
+## 密钥管理（仓库是公开的）
+
+GitHub Pages 免费版要求仓库公开，所以 **所有 key 一律不写进代码**，只在两处：
+
+| 场景 | 放在哪 |
+| --- | --- |
+| 本地手动 / 计划任务 | `local_config.py`（已 gitignore，复制 `local_config.example.py` 填值） |
+| 云端 GitHub Actions | 仓库 Settings → Secrets and variables → Actions（同名环境变量） |
+
+读取顺序：**环境变量 → `local_config.py` → 空串**（没配就自动跳过该功能，不会报错）。
+`config.py` 里只留 `_secret("XXX")` 调用，clone 下来的人看不到任何 key。
+
+> 安全提示：换成公开仓库前，请到对应官网**重置**曾提交过的 key（历史提交里仍留着旧值，
+> 删代码不等于失效）——天行数据换 key、Server酱重置 SendKey，然后同步更新 GitHub Secrets
+> 和本地 `local_config.py`。
 
 ## 质量规则维护位置（重要）
 

@@ -16,7 +16,12 @@
 #   FREELLMAPI_MODEL    FreeLLMAPI 模型名（可选，默认 qwen3-8b）
 #   JUHE_KEY             可选，聚合数据 key，没有可留空不填
 #   PUSHPLUS_TOKEN       可选，PushPlus token，没有可留空不填
-# 没填的环境变量会自动回退到 config.py 里的默认值，本地照常、云端不中断。
+# 没填的环境变量会回退到本地 local_config.py，本地照常、云端不中断。
+# 仓库为公开仓库：所有 key 只存在 Secrets 里（代码里不写死），见 README「密钥管理」。
+#
+# 网页版（GitHub Pages）：脚本会把当天 markdown 渲染成 docs/index.html 并提交推送，
+# Pages 自动发布为 https://nxxihai.github.io/daily_news/（永远是最新一期）。
+# 一次性设置：仓库 Settings → Pages → Source 选 "Deploy from a branch"，分支 main、目录 /docs。
 
 name: Daily News Report
 
@@ -68,7 +73,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/seen.json
+          # docs/index.html 正常情况下已由 run_daily.py 提交推送，这里只做兜底
+          git add data/seen.json docs/index.html
           if git diff --cached --quiet; then
             echo "No dedup changes, skip commit."
           else

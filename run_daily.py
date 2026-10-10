@@ -1,8 +1,14 @@
-﻿"""每日新闻早报主入口：采集 → 过滤 → 提炼 → 推送。
+﻿"""每日新闻早报主入口：采集 → 过滤 → 提炼 → 发布网页 → 推送。
 
 用法：
-    python run_daily.py            完整跑一遍并推送微信
-    python run_daily.py --dry-run  只采集+提炼，打印结果不推送（先用这个看效果）
+    python run_daily.py            完整跑一遍：发网页版 + 推送微信
+    python run_daily.py --dry-run  只采集+提炼，生成 docs/index.html 供本地预览，不提交不推送
+
+流程：
+    ① 采集/过滤/提炼 → markdown（原有逻辑）
+    ② markdown 渲染成 HTML 写入 docs/index.html，提交推送到 GitHub →
+       GitHub Pages 自动发布为 config.SITE_URL（永远是最新一期）
+    ③ 推送微信：正文第一行放网页链接，页面发布失败则退回纯文字版
 
 可配合 Windows 任务计划程序，每天早上 8 点自动执行：
     操作：python  参数：run_daily.py 的完整路径
@@ -38,6 +44,7 @@ _force_ipv4()
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+from config import SITE_URL  # noqa: E402
 from collectors import collect_all  # noqa: E402
 from filter import (  # noqa: E402
     filter_by_date,
@@ -48,6 +55,7 @@ from filter import (  # noqa: E402
     mark_seen,
     save_seen,
 )
+from publish import publish_page  # noqa: E402
 from sender import send  # noqa: E402
 from summarize import summarize  # noqa: E402
 
@@ -87,16 +95,24 @@ def main(dry_run=False):
     title = f"每日新闻早报 {today}"
     markdown = summarize(fresh)
 
+    # 4. 生成网页版（docs/index.html → GitHub Pages，永远是最新一期）
+    #    发布失败不影响推送：下面会退回不带链接的纯文字版
+    page_ok, page_msg = publish_page(title, markdown, commit=not dry_run)
+    print(f"[run] {page_msg}")
+
     if dry_run:
         print("=" * 56)
         print(title)
         print(markdown)
         print("=" * 56)
-        print("[run] dry-run 模式，未推送。")
+        print(f"[run] dry-run 模式，未推送。本地可打开预览：{page_msg}")
         return 0
 
-    # 4. 推送（成功才记录去重，失败可安全重试）
-    ok, msg = send(title, markdown)
+    # 5. 推送：正文第一行放网页链接（页面没发出去就不附，避免点到旧页面）
+    body = markdown
+    if page_ok:
+        body = f"[网页版（建议点开）：{SITE_URL}]({SITE_URL})\n\n{markdown}"
+    ok, msg = send(title, body)
     print(f"[run] {msg}")
     if ok:
         # 只记录实际推送出去的新闻标题，避免候选池被过度过滤
