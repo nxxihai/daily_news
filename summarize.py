@@ -43,13 +43,22 @@ HANGING_WORDS = [
 
 SECTIONS = ["国际", "国内", "热点"]
 
-# 最近一次 summarize() 实际走的通道：'llm'（AI 提炼）或 'rule'（规则精简版）。
-# 供 run_daily 在规则兜底时标注，避免"质量下降"被误当成程序坏了。
+# 最近一次 summarize() 实际走的通道：'llm'（AI 提炼）或 'rule'（规则精简版），
+# 以及具体用的模型名（如 deepseek-chat / glm-4-flash）。
+# 供 run_daily 标注，并写进页面提交信息，方便回溯"某天为什么质量差"。
 LAST_ENGINE = ""
+LAST_MODEL = ""
 
 
 def engine_used():
     """最近一次 summarize() 用的是哪条通道：'llm' 或 'rule'。"""
+    return LAST_ENGINE
+
+
+def engine_detail():
+    """通道细节：AI 版返回模型名（如 deepseek-chat），规则版返回 'rule'，没跑过返回空串。"""
+    if LAST_ENGINE == "llm":
+        return LAST_MODEL or "llm"
     return LAST_ENGINE
 
 # 采集源分类 → 早报三栏的映射（规则版用）
@@ -1376,7 +1385,7 @@ def summarize(news_items):
     4. 校验通过则补充缺失分类（如有），返回结果
     5. 全部 LLM 失败，退回改进版规则筛选
     """
-    global LAST_ENGINE
+    global LAST_ENGINE, LAST_MODEL
     if not news_items:
         return ""
 
@@ -1394,6 +1403,7 @@ def summarize(news_items):
 
     best_partial = None   # 校验未完全通过时，条数最多的部分结果（可补充后采用）
     best_count = 0
+    best_model = ""       # 上面那份部分结果是哪个模型给的（写进提交信息便于回溯）
 
     for provider in LLM_PROVIDERS:
         if not provider.get("api_key"):
@@ -1416,6 +1426,7 @@ def summarize(news_items):
         if total > best_count:
             best_count = total
             best_partial = sections
+            best_model = provider["model"]
 
         format_ok = _is_format_ok(sections)
         chinese_ok = _is_chinese_ok(sections)
@@ -1434,6 +1445,7 @@ def summarize(news_items):
                 if total2 > best_count:
                     best_count = total2
                     best_partial = sections2
+                    best_model = provider["model"]
                 if (_is_format_ok(sections2) and _is_chinese_ok(sections2)
                         and _is_summary_complete(sections2)):
                     sections = sections2
@@ -1459,6 +1471,7 @@ def summarize(news_items):
                 f"{provider['model']} 的提炼结果"
             )
             LAST_ENGINE = "llm"
+            LAST_MODEL = provider["model"]
             return sections_to_markdown(sections)
         else:
             reasons = []
@@ -1496,6 +1509,7 @@ def summarize(news_items):
         sections = _deduplicate_sections(sections)
         sections = _drop_stale_items(sections)
         LAST_ENGINE = "llm"
+        LAST_MODEL = best_model or "partial"
         return sections_to_markdown(sections)
 
     print("[summarize] 所有 LLM 均不可用或格式不达标，退回规则筛选")

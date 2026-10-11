@@ -57,7 +57,7 @@ from filter import (  # noqa: E402
 )
 from publish import publish_page  # noqa: E402
 from sender import send  # noqa: E402
-from summarize import engine_used, summarize  # noqa: E402
+from summarize import engine_detail, engine_used, summarize  # noqa: E402
 from tts import AUDIO_REL, build_audio  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -117,8 +117,9 @@ def main(dry_run=False):
 
     # 5. 生成网页版（docs/index.html → GitHub Pages，永远是最新一期）
     #    发布失败不影响推送：下面会退回不带链接的纯文字版
+    print(f"[run] 提炼通道：{engine_detail() or '未知'}")
     page_ok, page_msg = publish_page(
-        title, markdown, commit=not dry_run, engine=engine_used(),
+        title, markdown, commit=not dry_run, engine=engine_detail(),
         audio_src=AUDIO_REL if audio_ok else "",
     )
     print(f"[run] {page_msg}")

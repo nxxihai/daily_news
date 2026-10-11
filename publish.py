@@ -475,7 +475,13 @@ def publish_page(title, markdown, commit=True, generated_at=None, engine="llm",
     if not commit:
         return True, f"dry-run：仅生成 {PAGE_REL}，未提交"
     paths = [PAGE_REL] + ([audio_src] if audio_src else [])
-    ok, msg = git_publish(paths=tuple(paths))
+    # 提交信息里带上"用的哪个模型/是规则版"，日后 git log 就能回溯某天为什么质量差
+    m = re.search(r"\d{4}-\d{2}-\d{2}", title or "")
+    date_text = m.group(0) if m else datetime.now(BJT).strftime("%Y-%m-%d")
+    detail = f"（{engine}）" if engine else ""
+    ok, msg = git_publish(
+        paths=tuple(paths), message=f"docs: 更新早报网页 {date_text}{detail}"
+    )
     if ok:
         return True, f"{msg} → 网页地址 {SITE_URL}"
     return False, f"网页未发布：{msg}（本次推送退回纯文字版）"

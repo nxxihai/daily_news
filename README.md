@@ -50,6 +50,16 @@ python run_daily.py
 本地仓库长期没 `git pull`（早报机器人一直在提交）时，脚本会基于远端最新提交生成一个只改页面的
 提交再推送，全程不动本地分支和工作区，所以本地计划任务也不会因为"落后"而推不上去。
 
+## 本机网络备忘（Steam++ / Watt Toolkit）
+
+- Python 请求报 `CERTIFICATE_VERIFY_FAILED`（LLM 通道、新浪源集体 SSL 失败）：
+  它的系统代理会做 HTTPS 中间人，本机证书库不认它的自签 CA →
+  在 `local_config.py` 里设 `BYPASS_SYSTEM_PROXY = True`（本机脚本直连即可）
+- `git push` 报 `Failed to connect to github.com port 443` / `Connection was reset`：
+  它把 github.com 指到本地反代、而反代偶发不响应 →
+  先重启 Steam++ 的"网络加速"（停止→启动）；急用时让 git 直接走它的代理端口：
+  `git -c http.proxy=http://127.0.0.1:26561 push`
+
 ## 密钥管理（仓库是公开的）
 
 GitHub Pages 免费版要求仓库公开，所以 **所有 key 一律不写进代码**，只在两处：

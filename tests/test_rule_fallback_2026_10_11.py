@@ -18,6 +18,7 @@ from summarize import (
     _rich_summary,
     _shorten_head,
     _strip_source_noise,
+    engine_detail,
     engine_used,
     normalize_title,
 )
@@ -125,6 +126,10 @@ class HeadCleanTest(unittest.TestCase):
 class EngineFlagTest(unittest.TestCase):
     def test_engine_used_returns_string(self):
         self.assertIsInstance(engine_used(), str)
+
+    def test_engine_detail_returns_string(self):
+        """提交通道细节（模型名/rule），会写进页面提交信息便于回溯。"""
+        self.assertIsInstance(engine_detail(), str)
 
 
 class QaStyleSummaryTest(unittest.TestCase):
