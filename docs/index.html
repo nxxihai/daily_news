@@ -69,21 +69,13 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
 }
 .foot{margin:26px 0 0; color:var(--muted); font-size:12.5px; text-align:center; line-height:2}
 .foot a{color:var(--muted); text-decoration:underline}
-/* 听新闻：标题下方紧跟的朗读条（吸顶，滚动时也在）+ 当前条目高亮
-   不支持语音合成的浏览器会自动隐藏该栏 */
-.player{position:sticky; top:0; z-index:9; margin:0 0 18px;
+/* 听新闻：标题下方紧跟的原生播放器（吸顶，滚动时也在）；没有 MP3 时整块不渲染 */
+.player{position:sticky; top:0; z-index:9; margin:0 0 18px; padding:9px 12px;
+  display:flex; align-items:center; gap:10px;
   background:var(--card); border:1px solid var(--line); border-radius:14px;
   box-shadow:var(--shadow)}
-.player-in{padding:8px 12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
-.pbtn{border:1px solid var(--line); background:transparent; color:var(--text); border-radius:999px;
-  padding:7px 13px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer}
-.pbtn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
-.pbtn:active{transform:translateY(1px)}
-.pbtn:disabled{opacity:.45; cursor:not-allowed}
-.pstat{margin-left:auto; color:var(--muted); font-size:12px; white-space:nowrap}
-.item.playing{background:rgba(37,99,235,.10); border-radius:12px; padding-left:10px;
-  padding-right:10px; margin:0 -10px}
-.item.playing .head{color:var(--accent)}
+.plabel{flex:0 0 auto; color:var(--accent); font-size:13px; font-weight:600; white-space:nowrap}
+.player audio{flex:1 1 auto; width:100%; min-width:0; height:36px}
 </style>
 </head>
 <body>
@@ -91,153 +83,15 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
   <header class="hero">
     <p class="kicker">每日新闻早报</p>
     <h1 class="date">2026-10-11</h1>
-    <p class="meta">更新于 2026-10-11 08:23（北京时间） · AI 提炼自公开新闻源</p>
+    <p class="meta">更新于 2026-10-11 08:32（北京时间） · AI 提炼自公开新闻源</p>
   </header>
 
-<div class="player" id="player" hidden>
-  <div class="player-in">
-    <button class="pbtn primary" id="pplay" type="button">▶ 听新闻</button>
-    <button class="pbtn" id="pstop" type="button">停止</button>
-    <select class="pbtn" id="prate" aria-label="语速">
-      <option value="0.9">0.9×</option>
-      <option value="1" selected>1.0×</option>
-      <option value="1.15">1.15×</option>
-      <option value="1.3">1.3×</option>
-    </select>
-    <span class="pstat" id="pstat"></span>
-  </div>
+<div class="player">
+  <span class="plabel">听新闻</span>
+  <audio controls preload="none" src="docs/audio/latest.mp3?v=2026-10-11">
+    您的浏览器不支持音频播放，<a href="docs/audio/latest.mp3?v=2026-10-11">点此下载 MP3</a>。
+  </audio>
 </div>
-<script>
-(function () {
-  var bar = document.getElementById('player');
-  var playBtn = document.getElementById('pplay');
-  var stopBtn = document.getElementById('pstop');
-  var rateSel = document.getElementById('prate');
-  var stat = document.getElementById('pstat');
-  if (!bar || !playBtn || !stopBtn || !rateSel || !stat) return;
-
-  var synth = window.speechSynthesis;
-  if (!synth || typeof SpeechSynthesisUtterance === 'undefined') {
-    // 微信内置浏览器等环境没有语音合成：显示禁用态并说明原因，不静默隐藏
-    bar.hidden = false;
-    playBtn.disabled = true;
-    stopBtn.disabled = true;
-    rateSel.disabled = true;
-    stat.textContent = '当前浏览器不支持朗读，请用手机自带浏览器打开';
-    return;
-  }
-
-  var items = [];
-  Array.prototype.forEach.call(document.querySelectorAll('section.sec'), function (sec) {
-    var sh = sec.querySelector('.sec-head');
-    var name = sh ? sh.textContent.replace(/\d+\s*条/g, '').trim() : '';
-    Array.prototype.forEach.call(sec.querySelectorAll('li.item'), function (li, i) {
-      var text = (li.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!text) return;
-      var head = li.querySelector('.head');
-      var desc = li.querySelector('.desc');
-      var spoken = (head ? head.textContent : '') + (desc ? '。' + desc.textContent : '');
-      spoken = (spoken || text).replace(/\s+/g, ' ').trim();
-      items.push({ el: li, text: (i === 0 && name ? name + '。' : '') + spoken });
-    });
-  });
-  if (!items.length) return;
-  bar.hidden = false;
-
-  var voice = null, queue = [], qi = 0, idx = -1, state = 'idle';
-
-  function pickVoice() {
-    var all = synth.getVoices() || [];
-    var zh = all.filter(function (v) {
-      return /zh|Chinese/i.test(v.lang) || /中文|Xiaoxiao|Xiaoyi|Yunxi|Huihui|Ting-Ting/i.test(v.name);
-    });
-    var natural = zh.filter(function (v) {
-      return /Natural|Online|Xiaoxiao|Xiaoyi|Yunxi/i.test(v.name);
-    });
-    voice = natural[0] || zh[0] || null;
-  }
-  pickVoice();
-  if (typeof synth.onvoiceschanged !== 'undefined') { synth.onvoiceschanged = pickVoice; }
-
-  function chunk(text) {
-    var out = [], buf = '', MAX = 70, ends = '。！？!?；;';
-    for (var i = 0; i < text.length; i++) {
-      buf += text.charAt(i);
-      if (buf.length >= MAX || ends.indexOf(text.charAt(i)) >= 0) { out.push(buf); buf = ''; }
-    }
-    if (buf) { out.push(buf); }
-    return out;
-  }
-
-  function clearHighlight() {
-    for (var i = 0; i < items.length; i++) { items[i].el.classList.remove('playing'); }
-  }
-
-  function speakNext() {
-    if (qi >= queue.length) { next(); return; }
-    var u = new SpeechSynthesisUtterance(queue[qi++]);
-    if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = 'zh-CN'; }
-    u.rate = parseFloat(rateSel.value) || 1;
-    u.onend = function () { if (state === 'playing') { speakNext(); } };
-    u.onerror = function () { if (state === 'playing') { speakNext(); } };
-    synth.speak(u);
-  }
-
-  function next() {
-    idx += 1;
-    if (idx >= items.length) { stop(); stat.textContent = '已读完'; return; }
-    clearHighlight();
-    var it = items[idx];
-    it.el.classList.add('playing');
-    if (it.el.scrollIntoView) { it.el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-    stat.textContent = '朗读中 ' + (idx + 1) + '/' + items.length;
-    queue = chunk(it.text);
-    qi = 0;
-    speakNext();
-  }
-
-  function start(fromIndex) {
-    if (!voice) { pickVoice(); }
-    state = 'playing';
-    playBtn.textContent = '⏸ 暂停';
-    idx = fromIndex - 1;
-    synth.cancel();
-    setTimeout(next, 60);   // cancel 后立刻 speak，部分 Chrome 会吞掉
-  }
-
-  function stop() {
-    state = 'idle';
-    synth.cancel();
-    clearHighlight();
-    playBtn.textContent = '▶ 听新闻';
-    if (stat.textContent.indexOf('已读完') !== 0) { stat.textContent = ''; }
-  }
-
-  playBtn.addEventListener('click', function () {
-    if (state === 'playing') {
-      state = 'paused';
-      synth.pause();
-      playBtn.textContent = '▶ 继续';
-      stat.textContent = '已暂停';
-    } else if (state === 'paused') {
-      state = 'playing';
-      synth.resume();
-      playBtn.textContent = '⏸ 暂停';
-      if (idx >= 0) { stat.textContent = '朗读中 ' + (idx + 1) + '/' + items.length; }
-    } else {
-      start(0);
-    }
-  });
-
-  stopBtn.addEventListener('click', stop);
-
-  rateSel.addEventListener('change', function () {
-    if (state === 'playing' || state === 'paused') { start(Math.max(idx, 0)); }
-  });
-
-  window.addEventListener('pagehide', function () { synth.cancel(); });
-})();
-</script>
 
   <section class="sec" style="--sec:#2563eb"><h2 class="sec-head"><span class="dot"></span>国际<span class="count">5 条</span></h2><ol class="list"><li class="item"><span class="num">1</span><div class="bd"><p class="head">美国宣布制裁国际刑事法院</p><p class="desc">美国国务院10月9日宣布对ICC实施制裁，从制裁个人升级至制裁整个机构，可能严重制约其日常运作。</p></div></li><li class="item"><span class="num">2</span><div class="bd"><p class="head">美总统称或加入沙特打击胡塞</p><p class="desc">特朗普10月10日就利雅得机场遭袭表态，称美国"可能"加入沙特针对胡塞武装的打击行动，将仔细考虑。</p></div></li><li class="item"><span class="num">3</span><div class="bd"><p class="head">美俄达成柴油协议引乌方不满</p><p class="desc">泽连斯基10月9日称对美俄撇开乌克兰达成柴油协议感到"被背叛"，特朗普当天拒绝置评其批评。</p></div></li><li class="item"><span class="num">4</span><div class="bd"><p class="head">以色列空袭加沙致5人死亡</p><p class="desc">当地时间10月10日，以色列对加沙地带巴勒斯坦平民聚集区发动两次空袭，造成5人丧生、多人受伤。</p></div></li><li class="item"><span class="num">5</span><div class="bd"><p class="head">土耳其禁未满15周岁开社媒账号</p><p class="desc">土耳其总统府10月10日发布条例，自11月1日起禁止未满15周岁未成年人开设社交媒体账号。</p></div></li></ol></section><section class="sec" style="--sec:#dc2626"><h2 class="sec-head"><span class="dot"></span>国内<span class="count">5 条</span></h2><ol class="list"><li class="item"><span class="num">1</span><div class="bd"><p class="head">郑钦文首进中网女单决赛</p><p class="desc">10月10日晚，郑钦文以7比5、6比2击败梅尔滕斯，成为打进中网女单决赛首位中国球员。</p></div></li><li class="item"><span class="num">2</span><div class="bd"><p class="head">中法举行第二十八次战略对话</p><p class="desc">10月10日，王毅在大同与法国总统外事顾问博纳举行中法战略对话，就深化战略合作长时间深入沟通。</p></div></li><li class="item"><span class="num">3</span><div class="bd"><p class="head">存储芯片红利消退 千亿美元外资加速撤离韩股</p><p class="desc">韩国今年很长一段时间都是全球火热人工智能交易行情的标杆。</p></div></li><li class="item brief"><span class="num">4</span><div class="bd"><p class="head">中国军号：战争的走向由我说了算</p></div></li><li class="item brief"><span class="num">5</span><div class="bd"><p class="head">中国证监会召开专家座谈会 称资本市场运行总体稳健</p></div></li></ol></section><section class="sec" style="--sec:#7c3aed"><h2 class="sec-head"><span class="dot"></span>热点<span class="count">5 条</span></h2><ol class="list"><li class="item"><span class="num">1</span><div class="bd"><p class="head">食品安全法修订公开征求意见</p><p class="desc">市场监管总局10月10日起就食品安全法修订草案征求意见，涉及AI监管、校园食品安全等五方面内容。</p></div></li><li class="item"><span class="num">2</span><div class="bd"><p class="head">北京警方通报王皓被围堵辱骂事件</p><p class="desc">10月10日通报，WTT赛事期间3人因聚集辱骂国乒教练王皓被行拘，最小16岁，另有17人被批评教育。</p></div></li><li class="item"><span class="num">3</span><div class="bd"><p class="head">海口9岁自闭症男童电梯内被踹</p><p class="desc">近日海口一名自闭症男童独自乘电梯时被同乘陌生男子踹出电梯，涉事男子已被行政拘留10天。</p></div></li><li class="item"><span class="num">4</span><div class="bd"><p class="head">焚烧厂"不够烧"与"堆不下"并存</p><p class="desc">当前垃圾焚烧行业面临产能过剩与部分地区垃圾处理能力不足并存的矛盾，引发读者关注和讨论。</p></div></li><li class="item"><span class="num">5</span><div class="bd"><p class="head">女生校园内骑车被电动车撞倒离世</p><p class="desc">海南琼台师范学院大二女生胡宝骑车拿快递转弯，被直行的电动车撞倒离世。</p></div></li></ol></section>
   <footer class="foot">
