@@ -43,6 +43,15 @@ HANGING_WORDS = [
 
 SECTIONS = ["国际", "国内", "热点"]
 
+# 最近一次 summarize() 实际走的通道：'llm'（AI 提炼）或 'rule'（规则精简版）。
+# 供 run_daily 在规则兜底时标注，避免"质量下降"被误当成程序坏了。
+LAST_ENGINE = ""
+
+
+def engine_used():
+    """最近一次 summarize() 用的是哪条通道：'llm' 或 'rule'。"""
+    return LAST_ENGINE
+
 # 采集源分类 → 早报三栏的映射（规则版用）
 # 注意：社会新闻归入"热点"，财经/科技如果是要闻也可入国内但优先级低于政治社会
 CATEGORY_MAP = {
@@ -189,6 +198,13 @@ def _classify_by_title(title):
         and scores["国内"] <= scores["国际"]
         and hits["热点"]
         and all(kw in _WEAK_HOTSPOT_WORDS for kw in hits["热点"])
+        and any(kw in title for kw in _FOREIGN_ANCHORS)
+    ):
+        return "国际"
+    # 国际 vs 国内 同分且国际侧命中外国实体锚点 → 判国际。
+    # 例："人物｜白宫新任发言人：曾在中国生活三年" 里的"中国"不该把它拉到国内栏
+    if (
+        scores["国际"] == scores["国内"] == scores[best_sec]
         and any(kw in title for kw in _FOREIGN_ANCHORS)
     ):
         return "国际"
@@ -611,6 +627,19 @@ def _fill_missing_sections(sections, news_items, per_section=None):
     return sections
 
 
+def _borrow_ok(norm_a, norm_b):
+    """借用简介的匹配闸：只在"标题层面"确认是同一事件时才允许借用。
+
+    只用 _is_same_event 会借错（曾把"佩斯科夫表态俄罗斯"的简介借给
+    "白宫新任发言人"这条，摘要与要点完全对不上）。
+    """
+    if _is_similar_title(norm_a, norm_b):
+        return True
+    if set(re.findall(r"\d+", norm_a)) & set(re.findall(r"\d+", norm_b)):
+        return _longest_common_substring_len(norm_a, norm_b) >= 4
+    return False
+
+
 def _borrow_summary(n, norm, news_items):
     """本条无可用简介时，从其他来源找同一事件的报道，借用其简介。
 
@@ -620,10 +649,11 @@ def _borrow_summary(n, norm, news_items):
     for m in news_items:
         if m is n or not m.get("summary"):
             continue
-        if _is_same_event(norm, n.get("summary") or "", normalize_title(m["title"]), m["summary"]):
-            s = _rich_summary(m)
-            if s:
-                return s
+        if not _borrow_ok(norm, normalize_title(m["title"])):
+            continue
+        s = _rich_summary(m)
+        if s:
+            return s
     return None
 
 
@@ -761,20 +791,49 @@ def _is_title_repeat(title, summary):
         return False  # 太短无法可靠判断
     if s == t or s.startswith(t) or t.startswith(s):
         return True
+    ct = Counter(t)
+    reused = sum(min(cnt, ct.get(ch, 0)) for ch, cnt in Counter(s).items())
+    # 摘要开头就是标题的改写（前 len(t) 字里七成以上的字来自标题），
+    # 整体篇幅也没比标题长多少 → "标题换了说法 + 半句套话"，
+    # 如"美国制裁国际刑事法院" → "美国对国际刑事法院实施制裁，可能严重制约其运作能力。"
+    head_part = s[: len(t)]
+    head_reused = sum(
+        min(cnt, ct.get(ch, 0)) for ch, cnt in Counter(head_part).items()
+    )
+    if (
+        len(head_part) >= 6
+        and head_reused >= len(head_part) * 0.7
+        and len(s) <= len(t) * 2.5
+    ):
+        return True
     shorter_n = min(len(t), len(s))
     longer_n = max(len(t), len(s))
     # 篇幅差异过大说明补了新信息（或只截了一段），不判复述
     if longer_n - shorter_n > max(6, int(shorter_n * 0.6)):
         return False
-    ct = Counter(t)
-    reused = sum(min(cnt, ct.get(ch, 0)) for ch, cnt in Counter(s).items())
     return reused >= len(s) * 0.75
+
+
+def _strip_source_noise(text):
+    """去掉源简介开头的电头 / 记者署名等噪声。
+
+    如"中新网衡水10月10日电 (邢璐 王鹏 张凯)…"、"记者今天了解到，…"：
+    规则兜底直接引用源简介时，这些噪声会原样进早报，必须清掉。
+    """
+    s = (text or "").strip()
+    for _ in range(2):
+        s = re.sub(
+            r"^.{2,20}?\d{1,2}月\d{1,2}日电\s*(?:[（(][^)）]{0,40}[)）])?", "", s
+        ).strip()
+        s = re.sub(r"^记者[^，。；]{0,12}[，,：:]", "", s).strip()
+    return s
 
 
 def _rich_summary(n, per_line=None):
     """从候选条目提取可作摘要的实质简介；无可用内容返回 None。
 
-    不可用的情形：简介为空、过短(<15字)、或只是标题的同义复述。
+    不可用的情形：简介为空、过短(<15字)、只是标题的同义复述、
+    被平台截断成半句、或清掉电头后只剩口令碎片。
     返回 None 的条目不应强行选入（宁缺毋滥，避免"标题复述"式灌水摘要）。
     """
     per_line = per_line or NEWS_PER_LINE
@@ -782,7 +841,14 @@ def _rich_summary(n, per_line=None):
     if not raw:
         return None
     raw = raw.replace("**", "").replace("*", "").strip()
+    raw = _strip_source_noise(raw)
     if len(raw) < 15:
+        return None
+    # 口令/序号碎片（如"“5、4、3、2、1，点火！"）不是新闻内容
+    if re.match(r"^[“\"'（(]?\d+\s*[、,，]\s*\d+", raw):
+        return None
+    # 记者问答原文（"问：据报道…中方有何评论？"）不是新闻介绍
+    if re.match(r"^[问答复]\s*[:：]", raw):
         return None
     if _is_title_repeat(n.get("title", ""), raw):
         return None
@@ -794,20 +860,49 @@ def _rich_summary(n, per_line=None):
 
 _MAX_HEAD_LEN = 30
 
+# 源栏目前缀（"人物｜…"、"国际特稿：…"）：在早报里是噪声，去掉
+_COLUMN_PREFIX_RE = re.compile(
+    r"^(?:国际|国内|要闻|社会)?(?:人物|专访|特稿|深度|观察|评论|视频|图集|直播)"
+    r"\s*[｜|·:：]\s*"
+)
+# 尾段含这些词说明有信息量，不能当截断片段删掉
+_KEEP_TAIL_WORDS = [
+    "被", "将", "已", "获", "判", "罚", "刑拘", "拘留", "逮捕", "起诉", "判刑",
+    "获刑", "道歉", "回应", "通报", "处罚", "调查", "启动", "死亡", "受伤",
+    "遇难", "爆炸", "起火", "暂停", "取消", "恢复", "辞职", "免职", "签约",
+]
+
+
+def _strip_tail_fragment(head):
+    """标题以"，短片段"结尾（源标题被截断/拼接）时去掉该尾段。
+
+    如"小鹏当选…秘书长，何小鹏"、"女生校园内骑车被电动车撞倒离世，家属代理律师"。
+    """
+    m = re.search(r"[，,]\s*([^，,]{1,6})$", head)
+    if not m:
+        return head
+    tail = m.group(1)
+    if re.search(r"\d", tail) or any(w in tail for w in _KEEP_TAIL_WORDS):
+        return head
+    body = head[: m.start()]
+    return body if len(body) >= 10 else head
+
 
 def _shorten_head(head):
-    """要点过长且含冒号时，取冒号前的核心部分。
+    """清理要点：去掉源栏目前缀 / 截断尾段；过长且含冒号时压成冒号前的核心部分。
 
-    LLM/采集源常把官方措辞整句抄进要点（如"东方甄选回应青虾仁净含量偏差争议：
-    自然解冻的称重方法与现行法规要求的计量检测标准不一致"），页面上又长又乱；
-    冒号后多是解释或条款原文，压成冒号前的短句更像"要点"。
+    - LLM/采集源常把官方措辞整句抄进要点（如"东方甄选回应青虾仁净含量偏差争议：
+      自然解冻的称重方法与现行法规要求的计量检测标准不一致"），压成冒号前短句更像"要点"
+    - 采集源的栏目前缀（人物｜、专访｜）和截断尾段（"，何小鹏"）都该清掉
     """
-    t = (head or "").strip()
+    t = _COLUMN_PREFIX_RE.sub("", (head or "").strip())
+    t = _strip_tail_fragment(t)
     if len(t) <= _MAX_HEAD_LEN:
         return t
     m = re.match(r"^(.{8,}?)[：:](.+)$", t)
     if m:
-        return m.group(1).rstrip("，、；：,; ")
+        # 截断到冒号前可能又露出尾段碎片（"…离世，家属代理律师：两车违停"），再清一次
+        return _strip_tail_fragment(m.group(1).rstrip("，、；：,; "))
     return t
 
 
@@ -1104,10 +1199,9 @@ def _one_line_summary(n, per_line):
     min_limit = 20
     max_limit = 120
     if len(s) < min_limit:
-        # 太短时尝试用标题补充
-        extra = n["title"]
-        if extra not in s:
-            s = extra + "：" + s
+        # 太短不足以成句：宁缺毋滥，让调用方只用要点行。
+        # （旧的"用标题拼一句"会产出"标题：重复内容"这种观感很差的行）
+        return None
     if len(s) > max_limit:
         truncated = s[:max_limit]
         for punct in ["。", "！", "？", "；", "，"]:
@@ -1247,6 +1341,7 @@ def summarize(news_items):
     4. 校验通过则补充缺失分类（如有），返回结果
     5. 全部 LLM 失败，退回改进版规则筛选
     """
+    global LAST_ENGINE
     if not news_items:
         return ""
 
@@ -1326,6 +1421,7 @@ def summarize(news_items):
                 f"[summarize] 已采用 {provider['base_url']} "
                 f"{provider['model']} 的提炼结果"
             )
+            LAST_ENGINE = "llm"
             return sections_to_markdown(sections)
         else:
             reasons = []
@@ -1361,9 +1457,11 @@ def summarize(news_items):
         sections = _reclassify_sections(sections)
         sections = _fill_missing_sections(sections, news_items)
         sections = _deduplicate_sections(sections)
+        LAST_ENGINE = "llm"
         return sections_to_markdown(sections)
 
     print("[summarize] 所有 LLM 均不可用或格式不达标，退回规则筛选")
+    LAST_ENGINE = "rule"
     return rule_summary(news_items)
 
 

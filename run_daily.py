@@ -57,7 +57,7 @@ from filter import (  # noqa: E402
 )
 from publish import publish_page  # noqa: E402
 from sender import send  # noqa: E402
-from summarize import summarize  # noqa: E402
+from summarize import engine_used, summarize  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -92,8 +92,16 @@ def main(dry_run=False):
         return 0
 
     # 3. 提炼
-    title = f"每日新闻早报 {today}"
     markdown = summarize(fresh)
+    title = f"每日新闻早报 {today}"
+    if engine_used() == "rule":
+        # 规则兜底（没有 AI 提炼，通常因为云端 Secrets 没配 AI key）：质量会明显下降，
+        # 在推送标题里标注"精简版"，避免被误当成程序坏了
+        title += "（精简版）"
+        print(
+            "[run] 警告：AI 提炼通道全部不可用，本次为规则精简版。"
+            "请在仓库 Secrets 里配置 DEEPSEEK_API_KEY / ZHIPU_API_KEY / MODELSCOPE_API_KEY 任一"
+        )
 
     # 4. 生成网页版（docs/index.html → GitHub Pages，永远是最新一期）
     #    发布失败不影响推送：下面会退回不带链接的纯文字版
