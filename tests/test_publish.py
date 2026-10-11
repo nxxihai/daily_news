@@ -109,12 +109,13 @@ class AudioPlayerTest(unittest.TestCase):
         self.assertLess(page.index("</header>"), page.index('class="player"'))
         self.assertLess(page.index('class="player"'), page.index('<section class="sec"'))
 
-    def test_audio_url_cache_busted(self):
-        """文件名固定为 latest.mp3，必须带 ?v=日期，否则微信/浏览器会播旧音频。"""
+    def test_audio_url_is_site_path_and_cache_busted(self):
+        """页面里必须是站点路径 audio/latest.mp3（Pages 根=docs/），且带 ?v=日期 破缓存。"""
         page = render_html(
             "每日新闻早报 2026-10-11", SAMPLE, audio_src="docs/audio/latest.mp3"
         )
-        self.assertIn("docs/audio/latest.mp3?v=2026-10-11", page)
+        self.assertIn('src="audio/latest.mp3?v=2026-10-11"', page)
+        self.assertNotIn('src="docs/audio/', page)
 
     def test_page_is_script_free(self):
         """改回 MP3 方案后页面不再需要脚本，回归纯静态。"""

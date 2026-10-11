@@ -242,9 +242,11 @@ def render_html(title, markdown, generated_at=None, engine="llm", audio_src=""):
         "AI 提炼自公开新闻源" if engine != "rule" else "规则精简版（AI 通道不可用）"
     )
 
-    # 文件名固定（latest.mp3），必须带 ?v=日期 破缓存，否则微信/浏览器会播到旧音频
+    # 仓库路径 docs/audio/latest.mp3 在站点上对应 audio/latest.mp3（Pages 根 = docs/）；
+    # 文件名固定，必须带 ?v=日期 破缓存，否则微信/浏览器会播到旧音频
+    audio_url = audio_src[len("docs/"):] if audio_src.startswith("docs/") else audio_src
     audio_block = (
-        AUDIO_HTML.format(src=f"{audio_src}?v={date_text}") if audio_src else ""
+        AUDIO_HTML.format(src=f"{audio_url}?v={date_text}") if audio_url else ""
     )
 
     sections = parse_digest(markdown or "")
