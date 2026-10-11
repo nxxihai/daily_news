@@ -1,8 +1,12 @@
 # 每日新闻早报 - 云端定时推送
 #
-# 触发方式：由 cron-job.org 按北京时间 7:30 调用 GitHub API 触发 workflow_dispatch
+# 触发方式：由 cron-job.org 按北京时间 8:10 调用 GitHub API 触发 workflow_dispatch
 # （准点、可靠，不受 GitHub 调度延迟影响）。本 workflow 内不再设 schedule。
 # 也可在 Actions 页面 → Daily News Report → Run workflow 手动触发。
+#
+# 时间为什么是 8:10：AI 免费额度按 UTC 0 点重置 = 北京时间 08:00，7:30 跑容易撞上
+# 额度用尽、整篇退化成"规则版"。cron-job.org 后台记得确认时区是北京时间（或把时间按
+# UTC 换算），改时间后本地计划任务可用 python setup_schedule.py 同步成 08:10。
 #
 # 首次使用前，请在仓库 Settings → Secrets and variables → Action 添加：
 #   DEEPSEEK_API_KEY     DeepSeek 官方 key（推荐付费通道，最优先使用，稳定且极便宜）

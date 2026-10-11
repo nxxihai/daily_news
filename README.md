@@ -17,6 +17,19 @@ python run_daily.py
 
 > 含中文的调用建议写成 .py 脚本执行（Windows PowerShell 传中文参数易乱码）。
 
+## 每日定时触发（两条线，别同时开）
+
+| 触发方式 | 在哪改 | 建议时间 |
+| --- | --- | --- |
+| 云端（主） | cron-job.org 后台 → 调用 GitHub API 触发 `workflow_dispatch` | **北京时间 08:10** |
+| 本机（备） | Windows 计划任务 `DailyNewsReport`，用 `python setup_schedule.py` 注册/更新 | 08:10（改时间后重跑该脚本即覆盖） |
+
+- 为什么是 08:10：AI 免费额度按 **UTC 0 点重置 = 北京时间 08:00**，7:30 跑容易撞上额度用尽，
+  整篇退化成"规则版"（现在有重试兜底，但避开边界更稳）
+- cron-job.org 后台注意确认**时区**是北京时间；若它按 UTC 填，"8:10" 要换算成 `0:10 UTC`
+- workflow 本身**不设** `schedule`（GitHub 的 cron 常延迟），定时统一交给 cron-job.org；
+  两条触发同时开会一天推两次
+
 ## 文件分工
 
 | 文件 | 职责 |
