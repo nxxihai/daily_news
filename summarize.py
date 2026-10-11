@@ -24,7 +24,7 @@ from config import (
     NEWS_PER_SECTION,
     RETRY_BASE_DELAY,
 )
-from filter import importance_score, normalize_title
+from filter import dates_in_text, importance_score, normalize_title
 
 # 悬挂词：摘要若以这些词+句号结尾，说明是半句，应判定为截断
 HANGING_WORDS = [
@@ -263,7 +263,7 @@ def build_prompt(news_items, per_section=None, per_line=None):
     today_cn = f"{_now.year}年{_now.month}月{_now.day}日"
     today_iso = _now.strftime("%Y-%m-%d")
     yesterday_iso = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
-    cutoff_iso = (_now - timedelta(days=3)).strftime("%Y-%m-%d")
+    day_before_iso = (_now - timedelta(days=2)).strftime("%Y-%m-%d")
     return f"""你是资深新闻编辑。以下是今日从权威渠道采集的候选新闻（含标题、简介、来源）。
 
 候选新闻：
@@ -282,8 +282,10 @@ def build_prompt(news_items, per_section=None, per_line=None):
 
 【时间要求】
 - 今天是{today_cn}。候选新闻前面标注了日期（如"{today_iso}"）。
-- 优先选择标注日期为今天（{today_iso}）的新闻，其次是昨天（{yesterday_iso}）的。
-- 严格排除日期在3天以前的新闻（{cutoff_iso}及更早），即使内容重要也不选。
+- 只选今天（{today_iso}）或昨天（{yesterday_iso}）的新闻；前天（{day_before_iso}）及更早的一律不选，
+  即使内容重要也不选。
+- 介绍里不要出现"10月9日""10月8日"这类明显早于今天的日期；一条新闻唯一的时间信息就是
+  前天或更早，说明它是旧闻，请换另一条候选。
 - 如果标题里提到的具体事件日期是几个月前的（如"5月18日"、"6月26日"），这条是旧闻，必须排除。
 - 排除历史回顾类内容：事件本身发生在数月/数年前，如今只是"披露/首次公开/纪录片/影像曝光"
   （如"央视披露多年前营救细节"），不是当日新闻，一律不选。
@@ -784,6 +786,28 @@ def _post_filter_sections(sections):
             kept.append((title, summary))
         filtered[sec] = kept
     return filtered
+
+
+def _drop_stale_items(sections, now=None):
+    """兜底闸：丢掉"文本里唯一提到的日期是前天及更早"的条目。
+
+    10-11 的早报里混进"美国国务院10月9日宣布对ICC实施制裁"这类旧闻，
+    是候选池日期过滤与提示词时间窗都没拦住的情况，这里再兜一层；
+    只要正文里同时出现今天/昨天的日期，就认为讲的是当天的事，保留。
+    """
+    today = (now or datetime.now(BJT)).date()
+    yesterday = today - timedelta(days=1)
+    cleaned = {}
+    for sec, items in sections.items():
+        kept = []
+        for title, summary in items:
+            dates = dates_in_text(title + " " + summary, today)
+            if dates and all(d < yesterday for d in dates):
+                print(f"[后处理] 过滤旧日期（{max(dates)}）：{title[:30]}...")
+                continue
+            kept.append((title, summary))
+        cleaned[sec] = kept
+    return cleaned
 
 
 def _is_title_repeat(title, summary):
@@ -1428,6 +1452,8 @@ def summarize(news_items):
             sections = _fill_missing_sections(sections, news_items)
             # 补充后可能引入重复，再去重一次
             sections = _deduplicate_sections(sections)
+            # 兜底：去掉文本里明确写着前天及更早日期的旧闻
+            sections = _drop_stale_items(sections)
             print(
                 f"[summarize] 已采用 {provider['base_url']} "
                 f"{provider['model']} 的提炼结果"
@@ -1468,6 +1494,7 @@ def summarize(news_items):
         sections = _reclassify_sections(sections)
         sections = _fill_missing_sections(sections, news_items)
         sections = _deduplicate_sections(sections)
+        sections = _drop_stale_items(sections)
         LAST_ENGINE = "llm"
         return sections_to_markdown(sections)
 

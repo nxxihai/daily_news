@@ -172,7 +172,7 @@ SITE_URL = "https://nxxihai.github.io/daily_news/"
 # 合成失败会自动跳过（页面就不带播放器），不影响推送。
 TTS_ENABLED = os.environ.get("TTS_ENABLED", "1") != "0"
 TTS_VOICE = os.environ.get("TTS_VOICE") or "zh-CN-XiaoxiaoNeural"   # 女声；男声：zh-CN-YunxiNeural
-TTS_RATE = os.environ.get("TTS_RATE") or "+15%"                     # 语速，+15% 略快一些
+TTS_RATE = os.environ.get("TTS_RATE") or "-10%"                     # 语速，负值更慢（"0%" 为原生速度）
 
 
 # ================= 内容设置 =================

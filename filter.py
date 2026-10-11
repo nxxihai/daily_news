@@ -448,20 +448,44 @@ def _parse_item_datetime(n):
     return None
 
 
+_MONTH_DAY_RE = re.compile(r"(\d{1,2})月(\d{1,2})日")
+
+
+def dates_in_text(text, today=None):
+    """解析文本里的"M月D日"（按最接近今天的那个年份推断），返回日期列表。
+
+    很多源（联合早报/澎湃等）没有发布时间字段，只能从标题/摘要里的日期文字判断新旧。
+    """
+    today = today or datetime.now(BJT).date()
+    found = []
+    for mm, dd in _MONTH_DAY_RE.findall(text or ""):
+        for year in (today.year, today.year - 1):
+            try:
+                day = datetime(year, int(mm), int(dd)).date()
+            except ValueError:
+                continue
+            if day <= today:
+                found.append(day)
+                break
+    return found
+
+
 def filter_by_date(news):
     """过滤旧闻：优先按时间戳硬过滤，其次按标题/摘要中的日期文本过滤。
 
-    - 条目带可解析的发布时间（ctime）：超过 MAX_NEWS_AGE_DAYS 天直接丢弃
-      （可杜绝天行/聚合等接口返回的陈年缓存新闻）
+    - 条目带可解析的发布时间（ctime）：超过 MAX_NEWS_AGE_DAYS 个日历日直接丢弃
+    - 没有发布时间字段的：从标题/摘要里解析"M月D日"，只提到前天及更早的一律丢弃
+      （10-11 的早报里混进"10月9日宣布…"就是从这里漏进来的）
     - 文本中出现旧年份（2020-2025，不论是否带"年"字）或明显过去月份：丢弃
     """
     now = datetime.now(BJT).replace(tzinfo=None)  # 去掉时区，和 dt 保持一致，避免相减报错
+    today = now.date()
     current_month = now.month
     filtered = []
     for n in news:
-        # 1. 时间戳硬过滤（最可靠）
+        # 1. 时间戳硬过滤（最可靠，按日历日算差，不到 48 小时但跨两天的也算旧闻）
         dt = _parse_item_datetime(n)
-        if dt is not None and (now - dt).days >= MAX_NEWS_AGE_DAYS:
+        if dt is not None and (today - dt.date()).days >= MAX_NEWS_AGE_DAYS:
             continue
         text = n.get("title", "") + " " + n.get("summary", "")
         # 2. 排除旧年份（2020-2025，带不带"年"字都算，如"2025中法文化之春"）
@@ -481,6 +505,11 @@ def filter_by_date(news):
             end_month = int(range_match.group(2))
             # 如果范围完全在当前月之前（如4-7月，当前是8月）
             if end_month < current_month:
+                continue
+        # 3. 没有发布时间时，用文本里的日期兜底（只提到前天及更早 → 旧闻）
+        if dt is None:
+            text_dates = dates_in_text(text, today)
+            if text_dates and all((today - d).days >= MAX_NEWS_AGE_DAYS for d in text_dates):
                 continue
         filtered.append(n)
     return filtered
