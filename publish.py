@@ -374,12 +374,18 @@ def _repo_url(site_url):
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else ""
 
 
-def render_html(title, markdown, generated_at=None):
-    """生成完整 HTML 文档（单文件、内联样式）。"""
+def render_html(title, markdown, generated_at=None, engine="llm"):
+    """生成完整 HTML 文档（单文件、内联样式）。
+
+    engine="rule" 时页面上标注"规则精简版"，便于一眼看出 AI 通道是否可用。
+    """
     now = generated_at or datetime.now(BJT)
     m = re.search(r"\d{4}-\d{2}-\d{2}", title or "")
     date_text = m.group(0) if m else now.strftime("%Y-%m-%d")
     stamp = now.strftime("%Y-%m-%d %H:%M")
+    engine_note = (
+        "AI 提炼自公开新闻源" if engine != "rule" else "规则精简版（AI 通道不可用）"
+    )
 
     sections = parse_digest(markdown or "")
     body = _render_sections(sections) or (
@@ -409,7 +415,7 @@ def render_html(title, markdown, generated_at=None):
   <header class="hero">
     <p class="kicker">每日新闻早报</p>
     <h1 class="date">{html.escape(date_text)}</h1>
-    <p class="meta">更新于 {stamp}（北京时间） · AI 提炼自公开新闻源</p>
+    <p class="meta">更新于 {stamp}（北京时间） · {engine_note}</p>
   </header>
 {PLAYER_HTML}
   {body}
@@ -588,13 +594,14 @@ def git_publish(paths=(PAGE_REL,), message=None):
 
 
 # ================= 对外入口 =================
-def publish_page(title, markdown, commit=True, generated_at=None):
+def publish_page(title, markdown, commit=True, generated_at=None, engine="llm"):
     """渲染并发布当日网页。返回 (ok, 说明)。
 
     commit=False（dry-run）时只生成 docs/index.html 供本地预览，不提交不推送。
+    engine="rule" 表示本次是规则兜底（页面会标注"规则精简版"）。
     """
     try:
-        page = render_html(title, markdown, generated_at=generated_at)
+        page = render_html(title, markdown, generated_at=generated_at, engine=engine)
         write_page(page)
     except OSError as exc:
         return False, f"写入 {PAGE_REL} 失败：{exc}"

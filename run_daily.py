@@ -44,7 +44,7 @@ _force_ipv4()
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from config import SITE_URL  # noqa: E402
+from config import LLM_PROVIDERS, SERVERCHAN_KEY, SITE_URL  # noqa: E402
 from collectors import collect_all  # noqa: E402
 from filter import (  # noqa: E402
     filter_by_date,
@@ -67,6 +67,13 @@ SEEN_FILE = DATA_DIR / "seen.json"
 def main(dry_run=False):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now(BJT).strftime("%Y-%m-%d")
+
+    # 通道体检：只打印"有没有配 key"（不打印 key 内容），云端日志一眼看出问题
+    print(
+        "[run] AI 通道："
+        + " ".join(f"{p['model']}{'√' if p['api_key'] else '×'}" for p in LLM_PROVIDERS)
+    )
+    print(f"[run] 推送通道：Server酱{'√' if SERVERCHAN_KEY else '×'}")
 
     # 1. 采集
     news = collect_all()
@@ -105,7 +112,9 @@ def main(dry_run=False):
 
     # 4. 生成网页版（docs/index.html → GitHub Pages，永远是最新一期）
     #    发布失败不影响推送：下面会退回不带链接的纯文字版
-    page_ok, page_msg = publish_page(title, markdown, commit=not dry_run)
+    page_ok, page_msg = publish_page(
+        title, markdown, commit=not dry_run, engine=engine_used()
+    )
     print(f"[run] {page_msg}")
 
     if dry_run:

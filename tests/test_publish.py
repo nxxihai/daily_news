@@ -72,6 +72,14 @@ class RenderHtmlTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertIn("介绍 &amp; 内容", page)
 
+    def test_engine_note(self):
+        """页面要标出用的是 AI 提炼还是规则精简版（排查云端 AI 通道是否可用）。"""
+        self.assertIn("AI 提炼自公开新闻源", render_html("每日新闻早报 2026-10-11", SAMPLE))
+        self.assertIn(
+            "规则精简版（AI 通道不可用）",
+            render_html("每日新闻早报 2026-10-11", SAMPLE, engine="rule"),
+        )
+
     def test_empty_markdown_shows_notice(self):
         page = render_html("每日新闻早报", "")
         self.assertIn("本期内容尚未生成", page)
