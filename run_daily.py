@@ -58,6 +58,7 @@ from filter import (  # noqa: E402
 from publish import publish_page  # noqa: E402
 from sender import send  # noqa: E402
 from summarize import engine_used, summarize  # noqa: E402
+from tts import AUDIO_REL, build_audio  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -110,10 +111,15 @@ def main(dry_run=False):
             "请在仓库 Secrets 里配置 DEEPSEEK_API_KEY / ZHIPU_API_KEY / MODELSCOPE_API_KEY 任一"
         )
 
-    # 4. 生成网页版（docs/index.html → GitHub Pages，永远是最新一期）
+    # 4. 语音版（MP3）：合成失败就不带播放器，不影响发布
+    audio_ok, audio_msg = build_audio(markdown, title)
+    print(f"[run] {audio_msg}")
+
+    # 5. 生成网页版（docs/index.html → GitHub Pages，永远是最新一期）
     #    发布失败不影响推送：下面会退回不带链接的纯文字版
     page_ok, page_msg = publish_page(
-        title, markdown, commit=not dry_run, engine=engine_used()
+        title, markdown, commit=not dry_run, engine=engine_used(),
+        audio_src=AUDIO_REL if audio_ok else "",
     )
     print(f"[run] {page_msg}")
 
@@ -125,7 +131,7 @@ def main(dry_run=False):
         print(f"[run] dry-run 模式，未推送。本地可打开预览：{page_msg}")
         return 0
 
-    # 5. 推送：正文第一行放网页链接（页面没发出去就不附，避免点到旧页面）
+    # 6. 推送：正文第一行放网页链接（页面没发出去就不附，避免点到旧页面）
     body = markdown
     if page_ok:
         body = f"[网页版（建议点开）：{SITE_URL}]({SITE_URL})\n\n{markdown}"

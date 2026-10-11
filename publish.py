@@ -108,170 +108,24 @@ h1.date{margin:0; font-size:31px; line-height:1.3; font-weight:800; letter-spaci
 }
 .foot{margin:26px 0 0; color:var(--muted); font-size:12.5px; text-align:center; line-height:2}
 .foot a{color:var(--muted); text-decoration:underline}
-/* 听新闻：标题下方紧跟的朗读条（吸顶，滚动时也在）+ 当前条目高亮
-   不支持语音合成的浏览器会自动隐藏该栏 */
-.player{position:sticky; top:0; z-index:9; margin:0 0 18px;
+/* 听新闻：标题下方紧跟的原生播放器（吸顶，滚动时也在）；没有 MP3 时整块不渲染 */
+.player{position:sticky; top:0; z-index:9; margin:0 0 18px; padding:9px 12px;
+  display:flex; align-items:center; gap:10px;
   background:var(--card); border:1px solid var(--line); border-radius:14px;
   box-shadow:var(--shadow)}
-.player-in{padding:8px 12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
-.pbtn{border:1px solid var(--line); background:transparent; color:var(--text); border-radius:999px;
-  padding:7px 13px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer}
-.pbtn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
-.pbtn:active{transform:translateY(1px)}
-.pbtn:disabled{opacity:.45; cursor:not-allowed}
-.pstat{margin-left:auto; color:var(--muted); font-size:12px; white-space:nowrap}
-.item.playing{background:rgba(37,99,235,.10); border-radius:12px; padding-left:10px;
-  padding-right:10px; margin:0 -10px}
-.item.playing .head{color:var(--accent)}
+.plabel{flex:0 0 auto; color:var(--accent); font-size:13px; font-weight:600; white-space:nowrap}
+.player audio{flex:1 1 auto; width:100%; min-width:0; height:36px}
 """
 
 # 听新闻：浏览器内置语音合成（免费、无需 API/音频文件）。
 # 单独放成普通字符串，避免与 HTML 模板的 f-string 花括号冲突。
-PLAYER_HTML = """
-<div class="player" id="player" hidden>
-  <div class="player-in">
-    <button class="pbtn primary" id="pplay" type="button">▶ 听新闻</button>
-    <button class="pbtn" id="pstop" type="button">停止</button>
-    <select class="pbtn" id="prate" aria-label="语速">
-      <option value="0.9">0.9×</option>
-      <option value="1" selected>1.0×</option>
-      <option value="1.15">1.15×</option>
-      <option value="1.3">1.3×</option>
-    </select>
-    <span class="pstat" id="pstat"></span>
-  </div>
+AUDIO_HTML = """
+<div class="player">
+  <span class="plabel">听新闻</span>
+  <audio controls preload="none" src="{src}">
+    您的浏览器不支持音频播放，<a href="{src}">点此下载 MP3</a>。
+  </audio>
 </div>
-<script>
-(function () {
-  var bar = document.getElementById('player');
-  var playBtn = document.getElementById('pplay');
-  var stopBtn = document.getElementById('pstop');
-  var rateSel = document.getElementById('prate');
-  var stat = document.getElementById('pstat');
-  if (!bar || !playBtn || !stopBtn || !rateSel || !stat) return;
-
-  var synth = window.speechSynthesis;
-  if (!synth || typeof SpeechSynthesisUtterance === 'undefined') {
-    // 微信内置浏览器等环境没有语音合成：显示禁用态并说明原因，不静默隐藏
-    bar.hidden = false;
-    playBtn.disabled = true;
-    stopBtn.disabled = true;
-    rateSel.disabled = true;
-    stat.textContent = '当前浏览器不支持朗读，请用手机自带浏览器打开';
-    return;
-  }
-
-  var items = [];
-  Array.prototype.forEach.call(document.querySelectorAll('section.sec'), function (sec) {
-    var sh = sec.querySelector('.sec-head');
-    var name = sh ? sh.textContent.replace(/\\d+\\s*条/g, '').trim() : '';
-    Array.prototype.forEach.call(sec.querySelectorAll('li.item'), function (li, i) {
-      var text = (li.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (!text) return;
-      var head = li.querySelector('.head');
-      var desc = li.querySelector('.desc');
-      var spoken = (head ? head.textContent : '') + (desc ? '。' + desc.textContent : '');
-      spoken = (spoken || text).replace(/\\s+/g, ' ').trim();
-      items.push({ el: li, text: (i === 0 && name ? name + '。' : '') + spoken });
-    });
-  });
-  if (!items.length) return;
-  bar.hidden = false;
-
-  var voice = null, queue = [], qi = 0, idx = -1, state = 'idle';
-
-  function pickVoice() {
-    var all = synth.getVoices() || [];
-    var zh = all.filter(function (v) {
-      return /zh|Chinese/i.test(v.lang) || /中文|Xiaoxiao|Xiaoyi|Yunxi|Huihui|Ting-Ting/i.test(v.name);
-    });
-    var natural = zh.filter(function (v) {
-      return /Natural|Online|Xiaoxiao|Xiaoyi|Yunxi/i.test(v.name);
-    });
-    voice = natural[0] || zh[0] || null;
-  }
-  pickVoice();
-  if (typeof synth.onvoiceschanged !== 'undefined') { synth.onvoiceschanged = pickVoice; }
-
-  function chunk(text) {
-    var out = [], buf = '', MAX = 70, ends = '。！？!?；;';
-    for (var i = 0; i < text.length; i++) {
-      buf += text.charAt(i);
-      if (buf.length >= MAX || ends.indexOf(text.charAt(i)) >= 0) { out.push(buf); buf = ''; }
-    }
-    if (buf) { out.push(buf); }
-    return out;
-  }
-
-  function clearHighlight() {
-    for (var i = 0; i < items.length; i++) { items[i].el.classList.remove('playing'); }
-  }
-
-  function speakNext() {
-    if (qi >= queue.length) { next(); return; }
-    var u = new SpeechSynthesisUtterance(queue[qi++]);
-    if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = 'zh-CN'; }
-    u.rate = parseFloat(rateSel.value) || 1;
-    u.onend = function () { if (state === 'playing') { speakNext(); } };
-    u.onerror = function () { if (state === 'playing') { speakNext(); } };
-    synth.speak(u);
-  }
-
-  function next() {
-    idx += 1;
-    if (idx >= items.length) { stop(); stat.textContent = '已读完'; return; }
-    clearHighlight();
-    var it = items[idx];
-    it.el.classList.add('playing');
-    if (it.el.scrollIntoView) { it.el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-    stat.textContent = '朗读中 ' + (idx + 1) + '/' + items.length;
-    queue = chunk(it.text);
-    qi = 0;
-    speakNext();
-  }
-
-  function start(fromIndex) {
-    if (!voice) { pickVoice(); }
-    state = 'playing';
-    playBtn.textContent = '⏸ 暂停';
-    idx = fromIndex - 1;
-    synth.cancel();
-    setTimeout(next, 60);   // cancel 后立刻 speak，部分 Chrome 会吞掉
-  }
-
-  function stop() {
-    state = 'idle';
-    synth.cancel();
-    clearHighlight();
-    playBtn.textContent = '▶ 听新闻';
-    if (stat.textContent.indexOf('已读完') !== 0) { stat.textContent = ''; }
-  }
-
-  playBtn.addEventListener('click', function () {
-    if (state === 'playing') {
-      state = 'paused';
-      synth.pause();
-      playBtn.textContent = '▶ 继续';
-      stat.textContent = '已暂停';
-    } else if (state === 'paused') {
-      state = 'playing';
-      synth.resume();
-      playBtn.textContent = '⏸ 暂停';
-      if (idx >= 0) { stat.textContent = '朗读中 ' + (idx + 1) + '/' + items.length; }
-    } else {
-      start(0);
-    }
-  });
-
-  stopBtn.addEventListener('click', stop);
-
-  rateSel.addEventListener('change', function () {
-    if (state === 'playing' || state === 'paused') { start(Math.max(idx, 0)); }
-  });
-
-  window.addEventListener('pagehide', function () { synth.cancel(); });
-})();
-</script>
 """
 
 
@@ -374,10 +228,11 @@ def _repo_url(site_url):
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else ""
 
 
-def render_html(title, markdown, generated_at=None, engine="llm"):
+def render_html(title, markdown, generated_at=None, engine="llm", audio_src=""):
     """生成完整 HTML 文档（单文件、内联样式）。
 
-    engine="rule" 时页面上标注"规则精简版"，便于一眼看出 AI 通道是否可用。
+    - engine="rule" 时页面上标注"规则精简版"，便于一眼看出 AI 通道是否可用
+    - audio_src 非空时插入原生音频播放器（MP3，微信内置浏览器也能播）
     """
     now = generated_at or datetime.now(BJT)
     m = re.search(r"\d{4}-\d{2}-\d{2}", title or "")
@@ -385,6 +240,11 @@ def render_html(title, markdown, generated_at=None, engine="llm"):
     stamp = now.strftime("%Y-%m-%d %H:%M")
     engine_note = (
         "AI 提炼自公开新闻源" if engine != "rule" else "规则精简版（AI 通道不可用）"
+    )
+
+    # 文件名固定（latest.mp3），必须带 ?v=日期 破缓存，否则微信/浏览器会播到旧音频
+    audio_block = (
+        AUDIO_HTML.format(src=f"{audio_src}?v={date_text}") if audio_src else ""
     )
 
     sections = parse_digest(markdown or "")
@@ -417,7 +277,7 @@ def render_html(title, markdown, generated_at=None, engine="llm"):
     <h1 class="date">{html.escape(date_text)}</h1>
     <p class="meta">更新于 {stamp}（北京时间） · {engine_note}</p>
   </header>
-{PLAYER_HTML}
+{audio_block}
   {body}
   <footer class="foot">
     <p>本页每天推送后自动更新，永远是最新一期。</p>
@@ -594,21 +454,26 @@ def git_publish(paths=(PAGE_REL,), message=None):
 
 
 # ================= 对外入口 =================
-def publish_page(title, markdown, commit=True, generated_at=None, engine="llm"):
+def publish_page(title, markdown, commit=True, generated_at=None, engine="llm",
+                 audio_src=""):
     """渲染并发布当日网页。返回 (ok, 说明)。
 
     commit=False（dry-run）时只生成 docs/index.html 供本地预览，不提交不推送。
     engine="rule" 表示本次是规则兜底（页面会标注"规则精简版"）。
+    audio_src 非空时页面带播放器，并把语音文件与页面一起提交（仓库相对路径）。
     """
     try:
-        page = render_html(title, markdown, generated_at=generated_at, engine=engine)
+        page = render_html(
+            title, markdown, generated_at=generated_at, engine=engine, audio_src=audio_src
+        )
         write_page(page)
     except OSError as exc:
         return False, f"写入 {PAGE_REL} 失败：{exc}"
     print(f"[publish] 已生成 {PAGE_REL}（{len(page)} 字符）")
     if not commit:
         return True, f"dry-run：仅生成 {PAGE_REL}，未提交"
-    ok, msg = git_publish()
+    paths = [PAGE_REL] + ([audio_src] if audio_src else [])
+    ok, msg = git_publish(paths=tuple(paths))
     if ok:
         return True, f"{msg} → 网页地址 {SITE_URL}"
     return False, f"网页未发布：{msg}（本次推送退回纯文字版）"

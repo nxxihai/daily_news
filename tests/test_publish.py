@@ -92,28 +92,37 @@ class RenderHtmlTest(unittest.TestCase):
         self.assertNotIn("src=", page)
 
 
-class ListenTest(unittest.TestCase):
-    """听新闻（浏览器语音合成）：底栏、脚本、片段切分的存在性检查。"""
+class AudioPlayerTest(unittest.TestCase):
+    """听新闻（MP3 原生播放器）：位置、破缓存、无音频时不渲染。"""
 
-    def test_player_hidden_by_default_and_script_present(self):
-        page = render_html("每日新闻早报 2026-10-10", SAMPLE)
-        self.assertIn('<div class="player" id="player" hidden>', page)
-        self.assertIn("SpeechSynthesisUtterance", page)
-        self.assertIn("speechSynthesis", page)
-        # f-string 不会破坏 JS 里的反斜杠正则
-        self.assertIn(r"/\d+\s*条/g", page)
-        self.assertIn('id="pplay"', page)
-        # 微信内置浏览器等不支持语音合成时：显示禁用态 + 提示，而不是静默隐藏
-        self.assertIn("当前浏览器不支持朗读，请用手机自带浏览器打开", page)
-        self.assertIn(".pbtn:disabled{opacity:.45", page)
+    def test_player_absent_without_audio(self):
+        page = render_html("每日新闻早报 2026-10-11", SAMPLE)
+        self.assertNotIn('class="player"', page)
+        self.assertNotIn("<audio", page)
 
-    def test_player_sits_below_title_before_sections(self):
-        """朗读条要跟在标题下面，且在新闻卡片之前。"""
-        page = render_html("每日新闻早报 2026-10-10", SAMPLE)
-        self.assertLess(page.index('id="player"'), page.index('<section class="sec"'))
-        self.assertLess(page.index("</header>"), page.index('id="player"'))
+    def test_player_rendered_with_audio_and_sits_below_title(self):
+        page = render_html(
+            "每日新闻早报 2026-10-11", SAMPLE, audio_src="docs/audio/latest.mp3"
+        )
+        self.assertIn('class="player"', page)
+        self.assertIn("<audio controls preload=", page)
+        self.assertLess(page.index("</header>"), page.index('class="player"'))
+        self.assertLess(page.index('class="player"'), page.index('<section class="sec"'))
+
+    def test_audio_url_cache_busted(self):
+        """文件名固定为 latest.mp3，必须带 ?v=日期，否则微信/浏览器会播旧音频。"""
+        page = render_html(
+            "每日新闻早报 2026-10-11", SAMPLE, audio_src="docs/audio/latest.mp3"
+        )
+        self.assertIn("docs/audio/latest.mp3?v=2026-10-11", page)
+
+    def test_page_is_script_free(self):
+        """改回 MP3 方案后页面不再需要脚本，回归纯静态。"""
+        page = render_html(
+            "每日新闻早报 2026-10-11", SAMPLE, audio_src="docs/audio/latest.mp3"
+        )
+        self.assertNotIn("<script", page)
         self.assertIn("position:sticky", page)
-        self.assertNotIn("padding-bottom:78px", page)
 
 
 if __name__ == "__main__":

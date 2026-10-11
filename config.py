@@ -166,6 +166,15 @@ PUSHPLUS_TOKEN = _secret("PUSHPLUS_TOKEN")
 SITE_URL = "https://nxxihai.github.io/daily_news/"
 
 
+# ================= 语音版（听新闻 MP3） =================
+# 每天用 edge-tts（免费，微软自然音色）把当天早报合成一个 MP3，放到 docs/audio/latest.mp3，
+# 网页顶部用原生播放器播放（微信内置浏览器也能播、可锁屏后台播放）。
+# 合成失败会自动跳过（页面就不带播放器），不影响推送。
+TTS_ENABLED = os.environ.get("TTS_ENABLED", "1") != "0"
+TTS_VOICE = os.environ.get("TTS_VOICE") or "zh-CN-XiaoxiaoNeural"   # 女声；男声：zh-CN-YunxiNeural
+TTS_RATE = os.environ.get("TTS_RATE") or "+15%"                     # 语速，+15% 略快一些
+
+
 # ================= 内容设置 =================
 NEWS_PER_SECTION = 5    # 每类新闻条数（国际/国内/热点 各 5 条，共 15 条）
 NEWS_PER_LINE = 60      # 每条"介绍"的目标字数（简报格式：一句话介绍，20~60字）

@@ -1,2 +1,3 @@
 requests>=2.31
 openai>=1.30
+edge-tts>=6.1        # 听新闻：把早报合成 MP3（免费微软音色，无需 key）
