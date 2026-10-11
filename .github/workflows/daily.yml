@@ -40,7 +40,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10       # 云端总超时护栏（脚本内部还有 180 秒护栏）
+    timeout-minutes: 25       # 云端总超时护栏（脚本内部 900 秒护栏，含 AI 失败重试与等待）
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4

@@ -175,6 +175,17 @@ TTS_VOICE = os.environ.get("TTS_VOICE") or "zh-CN-XiaoxiaoNeural"   # 女声；�
 TTS_RATE = os.environ.get("TTS_RATE") or "-10%"                     # 语速，负值更慢（"0%" 为原生速度）
 
 
+# ================= AI 提炼重试 =================
+# 云端 provider 偶发超时/限流（实测有整点全挂的情况，会整篇退化成"规则版"）：
+# AI 失效就丢弃结果、等一会儿重来；全部尝试都失败才退回规则精简版（标题带"（精简版）"）。
+LLM_MAX_ATTEMPTS = int(os.environ.get("LLM_MAX_ATTEMPTS") or 3)   # 最多尝试几次（含首次）
+LLM_RETRY_DELAY = int(os.environ.get("LLM_RETRY_DELAY") or 45)     # 每次重试前等待秒数
+# 全部尝试都失败时，规则精简版是否仍然推送：
+#   True  = 宁可标「（精简版）」也不断更（默认）
+#   False = AI 不可用就当天不推（宁可断更也不发低质内容）
+PUSH_RULE_FALLBACK = os.environ.get("PUSH_RULE_FALLBACK", "1") != "0"
+
+
 # ================= 内容设置 =================
 NEWS_PER_SECTION = 5    # 每类新闻条数（国际/国内/热点 各 5 条，共 15 条）
 NEWS_PER_LINE = 60      # 每条"介绍"的目标字数（简报格式：一句话介绍，20~60字）

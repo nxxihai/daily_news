@@ -50,6 +50,20 @@ python run_daily.py
 本地仓库长期没 `git pull`（早报机器人一直在提交）时，脚本会基于远端最新提交生成一个只改页面的
 提交再推送，全程不动本地分支和工作区，所以本地计划任务也不会因为"落后"而推不上去。
 
+## AI 提炼失败时的行为（丢弃 + 重来）
+
+云端 provider 偶发超时/限流（实测有整点全挂、整篇退化成规则版的情况）。流程会：
+
+1. **丢弃**退回规则版的结果，等 45 秒重来，最多尝试 3 次
+   （`config.LLM_MAX_ATTEMPTS` / `LLM_RETRY_DELAY` 可调），日志里能看到
+   `AI 提炼第 1/3 次失败（本次结果已丢弃），45 秒后重试…`
+2. 3 次都失败才退回"规则精简版"，**推送标题会带「（精简版）」**，页面 meta 也会标注
+3. 想知道当天到底用了什么通道：看 `git log` 里页面提交的信息，如
+   `docs: 更新早报网页 2026-10-12（deepseek-chat）` 或 `（rule）`
+
+想改成"AI 不可用就当天不推（宁可断更也不发低质内容）"：把 `config.PUSH_RULE_FALLBACK`
+设为 `False`，或在环境变量/Secrets 里设 `PUSH_RULE_FALLBACK=0`。
+
 ## 本机网络备忘（Steam++ / Watt Toolkit）
 
 - Python 请求报 `CERTIFICATE_VERIFY_FAILED`（LLM 通道、新浪源集体 SSL 失败）：

@@ -20,6 +20,7 @@ import re
 import socket
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,7 +45,14 @@ _force_ipv4()
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from config import LLM_PROVIDERS, SERVERCHAN_KEY, SITE_URL  # noqa: E402
+from config import (  # noqa: E402
+    LLM_MAX_ATTEMPTS,
+    LLM_RETRY_DELAY,
+    LLM_PROVIDERS,
+    PUSH_RULE_FALLBACK,
+    SERVERCHAN_KEY,
+    SITE_URL,
+)
 from collectors import collect_all  # noqa: E402
 from filter import (  # noqa: E402
     filter_by_date,
@@ -63,6 +71,28 @@ from tts import AUDIO_REL, build_audio  # noqa: E402
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 SEEN_FILE = DATA_DIR / "seen.json"
+
+
+def _summarize_with_retry(news_items):
+    """反复尝试 AI 提炼：一旦退回规则版就把结果丢弃，等一会儿重来。
+
+    云端 provider 偶发超时/限流（实测 07:30 那种整点全挂），重试通常就能拿到
+    正常结果；全部尝试都失败才返回规则精简版（由调用方决定推不推）。
+    """
+    markdown = ""
+    for attempt in range(1, LLM_MAX_ATTEMPTS + 1):
+        markdown = summarize(news_items)
+        if engine_used() == "llm":
+            if attempt > 1:
+                print(f"[run] 第 {attempt}/{LLM_MAX_ATTEMPTS} 次尝试才拿到 AI 提炼结果")
+            return markdown
+        print(
+            f"[run] AI 提炼第 {attempt}/{LLM_MAX_ATTEMPTS} 次失败（本次结果已丢弃），"
+            f"{LLM_RETRY_DELAY} 秒后重试…"
+        )
+        if attempt < LLM_MAX_ATTEMPTS:
+            time.sleep(LLM_RETRY_DELAY)
+    return markdown
 
 
 def main(dry_run=False):
@@ -99,15 +129,21 @@ def main(dry_run=False):
         print("[run] 没有新新闻，今日跳过。")
         return 0
 
-    # 3. 提炼
-    markdown = summarize(fresh)
+    # 3. 提炼（AI 通道失效就丢弃重来，最多 LLM_MAX_ATTEMPTS 次）
+    markdown = _summarize_with_retry(fresh)
     title = f"每日新闻早报 {today}"
     if engine_used() == "rule":
-        # 规则兜底（没有 AI 提炼，通常因为云端 Secrets 没配 AI key）：质量会明显下降，
-        # 在推送标题里标注"精简版"，避免被误当成程序坏了
+        if not PUSH_RULE_FALLBACK:
+            print(
+                "[run] AI 通道不可用（已重试 "
+                f"{LLM_MAX_ATTEMPTS} 次），按配置今天不推送低质内容。"
+            )
+            return 0
+        # 规则兜底（没有 AI 提炼）：质量会明显下降，在推送标题里标注"精简版"
         title += "（精简版）"
         print(
-            "[run] 警告：AI 提炼通道全部不可用，本次为规则精简版。"
+            "[run] 警告：AI 提炼通道全部不可用（已重试 "
+            f"{LLM_MAX_ATTEMPTS} 次），本次为规则精简版。"
             "请在仓库 Secrets 里配置 DEEPSEEK_API_KEY / ZHIPU_API_KEY / MODELSCOPE_API_KEY 任一"
         )
 
@@ -157,11 +193,11 @@ def _thread_main(dry_run):
 
 if __name__ == "__main__":
     dry_run = "--dry-run" in sys.argv
-    # 总超时护栏：网络异常时最多跑 300 秒，避免计划任务永久挂起
+    # 总超时护栏：网络异常时最多跑 900 秒（含 AI 重试与等待），避免计划任务永久挂起
     runner = threading.Thread(target=_thread_main, args=(dry_run,), daemon=True)
     runner.start()
-    runner.join(timeout=300)
+    runner.join(timeout=900)
     if runner.is_alive():
-        print("[run] 执行超过 300 秒，强制结束（常见于网络请求挂起）。")
+        print("[run] 执行超过 900 秒，强制结束（常见于网络请求挂起）。")
         os._exit(2)
 
