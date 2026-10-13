@@ -172,7 +172,7 @@ def main(dry_run=False):
     # 6. 推送：正文第一行放网页链接（页面没发出去就不附，避免点到旧页面）
     body = markdown
     if page_ok:
-        body = f"[网页版（建议点开）：{SITE_URL}]({SITE_URL})\n\n{markdown}"
+        body = f"[网页版：{SITE_URL}]({SITE_URL})\n\n{markdown}"
     ok, msg = send(title, body)
     print(f"[run] {msg}")
     if ok:

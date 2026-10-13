@@ -359,6 +359,15 @@ def importance_score(news_item):
             score += 50
             break  # 命中高重要性关键词即大幅加分
 
+    # 国内政策/制度类要闻加分：国内候选池天生偏薄（政策新闻一天就几条），
+    # 补位时优先补"规划/条例/意见/部署"这类真要闻，避免被民生杂讯、体育活动占满。
+    # 用词偏制度信号，"发布会/发布新车"这类企业动作不会命中。
+    for kw in ("规划", "条例", "办法", "意见", "通知", "修订", "印发",
+               "全国人大", "国常会", "政治局", "国务院", "部署"):
+        if kw in title:
+            score += 22
+            break
+
     for kw in MEDIUM_IMPORTANCE_KEYWORDS:
         if kw in title:
             score += 25
