@@ -157,6 +157,7 @@ def main(dry_run=False):
     page_ok, page_msg = publish_page(
         title, markdown, commit=not dry_run, engine=engine_detail(),
         audio_src=AUDIO_REL if audio_ok else "",
+        tts_note="" if audio_ok else f"语音失败：{audio_msg[:70]}",
     )
     print(f"[run] {page_msg}")
 

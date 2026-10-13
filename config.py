@@ -167,12 +167,20 @@ SITE_URL = "https://nxxihai.github.io/daily_news/"
 
 
 # ================= 语音版（听新闻 MP3） =================
-# 每天用 edge-tts（免费，微软自然音色）把当天早报合成一个 MP3，放到 docs/audio/latest.mp3，
-# 网页顶部用原生播放器播放（微信内置浏览器也能播、可锁屏后台播放）。
-# 合成失败会自动跳过（页面就不带播放器），不影响推送。
-TTS_ENABLED = os.environ.get("TTS_ENABLED", "1") != "0"
+# 每天把当天早报合成一个 MP3 放到 docs/audio/latest.mp3，网页顶部用原生播放器播放
+# （微信内置浏览器也能播、可锁屏后台播放）。两个后端按顺序尝试：
+#   1) edge-tts：免费不用 key，但走微软 Edge 的非官方免费端点，微软改鉴权就会 403
+#      （2026-10-13 实测），等库更新才能恢复
+#   2) Azure Speech（官方 REST，稳定）：在环境变量/local_config 里给 key + region 即可启用，
+#      免费额度 50 万字符/月（每天约 800 字，够用一年多）
+# 合成失败会自动跳过（页面就不带播放器），不影响推送；失败原因会写进页面提交信息。
+TTS_ATTEMPTS = int(os.environ.get("TTS_ATTEMPTS") or 3)      # 每个后端的尝试次数
+TTS_RETRY_DELAY = int(os.environ.get("TTS_RETRY_DELAY") or 20)  # 同后端重试间隔（秒）
 TTS_VOICE = os.environ.get("TTS_VOICE") or "zh-CN-XiaoxiaoNeural"   # 女声；男声：zh-CN-YunxiNeural
-TTS_RATE = os.environ.get("TTS_RATE") or "-10%"                     # 语速，负值更慢（"0%" 为原生速度）
+TTS_RATE = os.environ.get("TTS_RATE") or "-10%"              # 语速，负值更慢（"0%" 为原生速度）
+# Azure Speech（可选，官方后端）：region 形如 eastasia / eastus
+AZURE_SPEECH_KEY = _secret("AZURE_SPEECH_KEY")
+AZURE_SPEECH_REGION = _secret("AZURE_SPEECH_REGION")
 
 
 # ================= AI 提炼重试 =================

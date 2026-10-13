@@ -457,12 +457,13 @@ def git_publish(paths=(PAGE_REL,), message=None):
 
 # ================= 对外入口 =================
 def publish_page(title, markdown, commit=True, generated_at=None, engine="llm",
-                 audio_src=""):
+                 audio_src="", tts_note=""):
     """渲染并发布当日网页。返回 (ok, 说明)。
 
     commit=False（dry-run）时只生成 docs/index.html 供本地预览，不提交不推送。
     engine="rule" 表示本次是规则兜底（页面会标注"规则精简版"）。
     audio_src 非空时页面带播放器，并把语音文件与页面一起提交（仓库相对路径）。
+    tts_note 非空（如语音合成失败原因）会写进提交信息，git log 即可回溯。
     """
     try:
         page = render_html(
@@ -475,10 +476,11 @@ def publish_page(title, markdown, commit=True, generated_at=None, engine="llm",
     if not commit:
         return True, f"dry-run：仅生成 {PAGE_REL}，未提交"
     paths = [PAGE_REL] + ([audio_src] if audio_src else [])
-    # 提交信息里带上"用的哪个模型/是规则版"，日后 git log 就能回溯某天为什么质量差
+    # 提交信息里带上"用的哪个模型/语音是否成功"，日后 git log 就能回溯某天为什么质量差
     m = re.search(r"\d{4}-\d{2}-\d{2}", title or "")
     date_text = m.group(0) if m else datetime.now(BJT).strftime("%Y-%m-%d")
-    detail = f"（{engine}）" if engine else ""
+    bits = [b for b in (engine, tts_note) if b]
+    detail = f"（{'，'.join(bits)}）" if bits else ""
     ok, msg = git_publish(
         paths=tuple(paths), message=f"docs: 更新早报网页 {date_text}{detail}"
     )
