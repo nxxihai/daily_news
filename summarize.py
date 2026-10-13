@@ -179,6 +179,14 @@ _FOREIGN_ANCHORS = [
     "欧盟", "北约", "联合国", "白宫", "克里姆林宫", "五角大楼", "中东", "加沙",
 ]
 
+# 标题"开头"就是中国主体时（中国是施动方），即便句中出现外国国名也应归国内：
+# "中国外交部对巴拉圭…采取反制措施""李强称中国愿同越南推动AI合作"。
+# 排除"中国游客/中国人/中国籍…"，那种主语是中国人，属社会新闻。
+_CHINA_SUBJECT_RE = re.compile(
+    r"^(中国(?!游客|人|公民|籍|学生|华人|侨|商会)|中方|我国|我外交部|外交部|"
+    r"李强|习近平|王毅|国务院|商务部|国防部|中央)"
+)
+
 # 热点词表里的"通用词"：国际要闻只命中这类词时，不该被抢进热点栏
 # （如"伊朗革命卫队…打击违规船只"含"违规"、"巴拿马发生7级地震"含"地震"）
 _WEAK_HOTSPOT_WORDS = [
@@ -208,6 +216,20 @@ def _classify_by_title(title):
     best_sec = max(scores, key=lambda s: (scores[s], priority[s]))
     if scores[best_sec] == 0:
         return None
+    # 中国是标题开头的施动方 → 国内优先（"中国外交部对…反制""李强称中国愿同越南…"）。
+    # 不看 best_sec：命中就判国内，否则下面"国际 vs 热点例外"会把它拽回国际栏。
+    if _CHINA_SUBJECT_RE.match(title):
+        return "国内"
+    # 外国实体在标题开头 → 国际优先（"蒙古国议会…""人物｜白宫新任发言人…"）。
+    # 只在前 6 个字里找，避免"内蒙古…"这类内嵌地名被误判。
+    if (
+        best_sec == "国内"
+        and any(kw in title[:6] for kw in _FOREIGN_ANCHORS)
+    ):
+        return "国际"
+    # 国际例外：标题含明确外国实体，且热点侧只命中"通用词"（违规/争议/引发/地震/
+    # 爆炸…）时判为国际——如"伊朗革命卫队…打击违规船只""美国直播枪决计划引发争议"。
+    # 国内词更多时不适用（避免把国内口径的新闻挪走）。
     if (
         scores["国际"] > 0
         and scores["国内"] <= scores["国际"]
@@ -216,8 +238,8 @@ def _classify_by_title(title):
         and any(kw in title for kw in _FOREIGN_ANCHORS)
     ):
         return "国际"
-    # 国际 vs 国内 同分且国际侧命中外国实体锚点 → 判国际。
-    # 例："人物｜白宫新任发言人：曾在中国生活三年" 里的"中国"不该把它拉到国内栏
+    # 国际 vs 国内 命中数完全打平且含外国实体 → 判国际
+    # （"人物｜白宫新任发言人：曾在中国生活三年"里的"中国"不该把它拉到国内栏）
     if (
         scores["国际"] == scores["国内"] == scores[best_sec]
         and any(kw in title for kw in _FOREIGN_ANCHORS)
@@ -564,6 +586,31 @@ def _deduplicate_sections(sections):
                 used.append((norm, summary))
 
     return {k: v for k, v in result.items() if v}
+
+
+def _merge_same_mainline_sections(sections, per_section=None):
+    """收敛同一热点的多条报道节点：同一地区 + 同一动作域只留描述最全的一条。
+
+    例："湖北水利发展集团总经理周俊主动投案接受审查调查"与
+    "湖北水利发展集团党委副书记、总经理周俊接受审查调查"是同一件事。
+    补位阶段本来就会做同主线过滤，但 LLM 已选中的条目只过了同事件判断，
+    措辞不同就会被当成两条，这里补上。
+    """
+    merged = {}
+    for sec, items in sections.items():
+        kept = []
+        for title, summary in items:
+            same_idx = None
+            for idx, (k_title, k_summary) in enumerate(kept):
+                if _same_mainline(title, k_title):
+                    same_idx = idx
+                    break
+            if same_idx is None:
+                kept.append((title, summary))
+            elif len(summary or "") > len(kept[same_idx][1] or ""):
+                kept[same_idx] = (title, summary)  # 新的一条描述更全
+        merged[sec] = kept
+    return merged
 
 
 def _fill_missing_sections(sections, news_items, per_section=None):
@@ -991,7 +1038,9 @@ def sections_to_markdown(sections, per_line=None):
     per_line = per_line or NEWS_PER_LINE
     lines = []
     for sec in SECTIONS:
-        items = sections.get(sec, [])
+        # 每栏最多 NEWS_PER_SECTION 条：LLM 偶尔超编（国际 6 条 / 国内 4 条），
+        # 超出的按原顺序舍弃，宁可少一条也不要版面失衡
+        items = sections.get(sec, [])[:NEWS_PER_SECTION]
         if not items:
             continue
         lines.append(f"【{sec}】")
@@ -1175,6 +1224,10 @@ _MAINLINE_DOMAINS = {
     "表彰": ["颁奖", "颁发", "颁授", "奖章", "勋章", "授予", "表彰", "获奖"],
     "能源": ["石油", "原油", "柴油", "汽油", "天然气", "液化气", "能源", "油价"],
     "贸易": ["关税", "贸易战", "贸易", "出口", "进口", "加征", "反倾销", "经贸"],
+    # 反腐/审查调查：同一人被留置与"主动投案"常是两条报道，属同一事件
+    "纪检": ["留置", "投案", "接受审查调查", "立案审查", "被查", "双开",
+             "开除党籍", "受贿", "贪污", "纪委", "监委", "严重违纪违法",
+             "主动投案", "接受调查"],
 }
 
 
@@ -1190,20 +1243,40 @@ def _mainline_regions(text):
     return tokens
 
 
-def _same_mainline(t1, t2):
-    """判断两条新闻是否属于同一热点主线（同一地区 + 同一动作域）。
+# 同一机构/同一人：纪检与商业人物类重复报道的强信号。
+# 前缀要求 ≥3 个汉字，"国防部"（2 字）这类通用机关名不会命中，避免误合并。
+_ENTITY_RES = (
+    re.compile(r"[\u4e00-\u9fa5]{3,8}(?:集团|股份|有限公司|公司|大学|学院|医院|银行|中心)"),
+    re.compile(r"(?:总经理|总裁|董事长|副总|经理|专员|部长|书记|主任|处长|科长"
+               r"|庭长|院长|校长|所长)[一-龥]{2,3}"),
+)
 
-    用于收敛同一事件的多个报道节点（如"美军打击伊朗"+"伊朗多地爆炸"），
-    避免早报同一主题连续刷屏；不同动作域（军事 vs 外交）则各自保留。
+
+def _shared_entity(t1, t2):
+    """两条标题是否指向同一机构或同一人（如"总经理周俊"）。"""
+    for rex in _ENTITY_RES:
+        if set(rex.findall(t1)) & set(rex.findall(t2)):
+            return True
+    return False
+
+
+def _same_mainline(t1, t2):
+    """判断两条新闻是否属于同一热点主线（同一动作域 + 同地区或同主体）。
+
+    用于收敛同一事件的多个报道节点（如"美军打击伊朗"+"伊朗多地爆炸"、
+    "周俊主动投案"+"周俊接受审查调查"），避免早报同一主题连续刷屏；
+    不同动作域（军事 vs 外交）则各自保留。
     地区锚点支持简称展开，因此"美俄达成柴油协议"与"俄将向美…供应石油"
     （同属能源域）会收敛为一条。
     """
-    if not (_mainline_regions(t1) & _mainline_regions(t2)):
-        return False
+    same_domain = False
     for domain_words in _MAINLINE_DOMAINS.values():
         if any(w in t1 for w in domain_words) and any(w in t2 for w in domain_words):
-            return True
-    return False
+            same_domain = True
+            break
+    if not same_domain:
+        return False
+    return bool(_mainline_regions(t1) & _mainline_regions(t2)) or _shared_entity(t1, t2)
 
 
 def _is_same_event(t1, s1, t2, s2):
@@ -1493,6 +1566,8 @@ def summarize(news_items):
             sections = _fill_missing_sections(sections, news_items)
             # 补充后可能引入重复，再去重一次
             sections = _deduplicate_sections(sections)
+            # 同一热点的多条报道节点收敛成一条（"主动投案"+"接受审查调查"）
+            sections = _merge_same_mainline_sections(sections)
             # 兜底：去掉文本里明确写着前天及更早日期的旧闻
             sections = _drop_stale_items(sections)
             print(
@@ -1536,6 +1611,7 @@ def summarize(news_items):
         sections = _reclassify_sections(sections)
         sections = _fill_missing_sections(sections, news_items)
         sections = _deduplicate_sections(sections)
+        sections = _merge_same_mainline_sections(sections)
         sections = _drop_stale_items(sections)
         LAST_ENGINE = "llm"
         LAST_MODEL = best_model or "partial"
