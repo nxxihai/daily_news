@@ -1234,6 +1234,9 @@ _MAINLINE_DOMAINS = {
 def _mainline_regions(text):
     """标题里的地区/政要锚点集合（含简称展开，如"美俄"→美国+俄罗斯）。"""
     tokens = {r for r in _MAINLINE_REGIONS + _MAINLINE_PEOPLE if r in text}
+    # 复用完整的外国实体表：_MAINLINE_REGIONS 里只有常见国家，"巴拉圭""智利"
+    # 这类名字缺一时同主线永远收敛不了（同一事件的第���、第5 条会同时进早报）
+    tokens.update(kw for kw in _FOREIGN_ANCHORS if kw in text)
     for short, full in _MAINLINE_ALIASES.items():
         if short in text:
             tokens.update(full)
