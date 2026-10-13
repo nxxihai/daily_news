@@ -358,10 +358,11 @@ def _do_request(provider, prompt):
             {"role": "system", "content": "你是资深新闻编辑，输出简洁、客观、有信息量。必须严格按照用户要求的格式输出，不要输出任何思考过程或解释。"},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.3,
-        # 输出 15 条(标题+摘要)约 1200-1800 tokens，2500 足够；
-        # 再大容易触发部分免费模型的 max_tokens 上限校验（400 Bad Request）
-        "max_tokens": 3500,
+        "temperature": provider.get("temperature", 0.3),
+        # 默认 3500：输出 15 条(要点+介绍)约 2000-2600 tokens（中文一字约 1 token，
+        # 别按英文估 1200-1800），再大容易触发部分免费模型的 max_tokens 上限校验（400）。
+        # 额度更大的模型可在 config 里单独调大（见 DeepSeek 的 max_tokens）。
+        "max_tokens": provider.get("max_tokens", 3500),
     }
     if provider.get("extra_body"):
         payload.update(provider["extra_body"])

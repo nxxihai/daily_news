@@ -68,6 +68,8 @@ LLM_PROVIDERS = [
         "base_url": "https://api.deepseek.com/v1",
         "api_key": _secret("DEEPSEEK_API_KEY"),
         "model": "deepseek-chat",
+        # deepseek-chat 最大输出 8K，给足 6000，避免 15 条输出被截断（"摘要截断"）
+        "max_tokens": 6000,
         "timeout": 60,
         "max_retries": 1,
     },
