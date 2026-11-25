@@ -95,9 +95,30 @@ def _summarize_with_retry(news_items):
     return markdown
 
 
+def _already_pushed_today(today):
+    """今天是否已经推送过（以 docs/index.html 的 meta 日期为准）。
+
+    每天推送都会把页面覆盖写成"更新于 YYYY-MM-DD …"，所以页面日期就是当天的
+    推送标志。只在 GitHub schedule 触发时启用——手动 Run workflow 和本地跑
+    永远照常推送，方便补发/调试。
+    """
+    page = BASE_DIR / "docs" / "index.html"
+    if not page.exists():
+        return False
+    try:
+        return f"更新于 {today}" in page.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def main(dry_run=False):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now(BJT).strftime("%Y-%m-%d")
+
+    # 防重复门：08:10 / 08:45 两次调度（以及万一复活的 cron-job）不会一天推两条
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and _already_pushed_today(today):
+        print(f"[run] 今天（{today}）已推送过，跳过本次 schedule，避免重复。")
+        return 0
 
     # 通道体检：只打印"有没有配 key"（不打印 key 内容），云端日志一眼看出问题
     print(
